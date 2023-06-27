@@ -1,0 +1,9 @@
+[package]
+name = "appit"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+winit = "0.28.6"
+raw-window-handle = "0.5.1"
