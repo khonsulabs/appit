@@ -28,6 +28,7 @@ pub enum AppMessage {
         open_sender: mpsc::SyncSender<Result<Arc<winit::window::Window>, OsError>>,
     },
     CloseWindow(WindowId),
+    WindowPanic(WindowId),
 }
 
 #[derive(Debug)]

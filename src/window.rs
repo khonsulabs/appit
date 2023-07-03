@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
+use std::panic::{AssertUnwindSafe, UnwindSafe};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 use std::thread;
@@ -151,7 +152,7 @@ where
         // avoid a "frozen" window causing massive memory allocations, we'll use
         // a fixed-size channel and be cautious to not block the main event loop
         // by always using try_send.
-        let (sender, receiver) = mpsc::sync_channel(128);
+        let (sender, receiver) = mpsc::sync_channel(1024);
         let Some(winit) = self.owner.open(self.attributes, sender)? else {
             return Ok(None)
         };
@@ -159,7 +160,7 @@ where
             id: winit.id(),
             app: self.owner.app(),
         };
-        let mut running_window = RunningWindow {
+        let running_window = RunningWindow {
             messages: receiver,
             app: self.owner.app(),
             occluded: winit.is_visible().unwrap_or(false),
@@ -297,25 +298,31 @@ impl RunningWindow {
         self.modifiers
     }
 
-    fn run_with<Behavior>(&mut self, context: Behavior::Context)
+    fn run_with<Behavior>(mut self, context: Behavior::Context)
     where
         Behavior: self::WindowBehavior,
     {
-        let mut behavior = Behavior::initialize(self, context);
-        while !self.close && self.process_messages_until_redraw(&mut behavior) {
-            self.next_redraw_target = None;
-            behavior.redraw(self);
-        }
-        drop(behavior);
+        let proxy = self.app.proxy.clone();
+        let window_id = self.window.id();
+        let possible_panic = std::panic::catch_unwind(AssertUnwindSafe(move || {
+            let mut behavior = Behavior::initialize(&mut self, context);
+            while !self.close && self.process_messages_until_redraw(&mut behavior) {
+                self.next_redraw_target = None;
+                behavior.redraw(&mut self);
+            }
+            // Do not notify the main thread to close the window until after the
+            // behavior is dropped. This upholds the requirement for RawWindowHandle
+            // by making sure that any resources required by the behavior have had a
+            // chance to be freed.
+        }));
 
-        // Do not notify the main thread to close the window until after the
-        // behavior is dropped. This upholds the requirement for RawWindowHandle
-        // by making sure that any resources required by the behavior have had a
-        // chance to be freed.
-        let _result = self
-            .app
-            .proxy
-            .send_event(AppMessage::CloseWindow(self.window.id()));
+        //
+        if let Err(panic) = possible_panic {
+            let _result = proxy.send_event(AppMessage::WindowPanic(window_id));
+            std::panic::resume_unwind(panic)
+        } else {
+            let _result = proxy.send_event(AppMessage::CloseWindow(window_id));
+        }
     }
 
     fn process_messages_until_redraw<Behavior>(&mut self, behavior: &mut Behavior) -> bool
@@ -616,12 +623,12 @@ enum TimeUntilRedraw {
 /// consumers of the libraries. This trait provides functions for each of the
 /// events a window may receive, enabling the type to react and update its
 /// state.
-pub trait WindowBehavior: Sized + 'static {
+pub trait WindowBehavior: UnwindSafe + Sized + 'static {
     /// A type that is passed to [`initialize()`](Self::initialize).
     ///
     /// This allows providing data to the window from the thread that is opening
     /// the window without requiring that `WindowBehavior` also be `Send`.
-    type Context: Send;
+    type Context: Send + UnwindSafe;
 
     /// Returns a new window builder for this behavior. When the window is
     /// initialized, a default [`Context`](Self::Context) will be passed.

@@ -6,6 +6,8 @@
 mod private;
 mod window;
 
+pub use winit;
+
 use raw_window_handle::HasRawWindowHandle;
 pub use window::{RunningWindow, Window, WindowBehavior, WindowBuilder};
 
@@ -68,6 +70,11 @@ impl PendingApp {
                     AppMessage::CloseWindow(window_id) => {
                         if self.running.windows.close(window_id) {
                             *control_flow = ControlFlow::ExitWithCode(0);
+                        }
+                    }
+                    AppMessage::WindowPanic(window_id) => {
+                        if self.running.windows.close(window_id) {
+                            *control_flow = ControlFlow::ExitWithCode(1);
                         }
                     }
                     AppMessage::OpenWindow {
