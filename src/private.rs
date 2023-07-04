@@ -10,10 +10,13 @@ use winit::event::{
 use winit::window::{Theme, WindowId};
 
 use crate::window::WindowAttributes;
-use crate::App;
+use crate::{App, Message};
 
-pub trait ApplicationSealed {
-    fn app(&self) -> App;
+pub trait ApplicationSealed<AppMessage>
+where
+    AppMessage: Message,
+{
+    fn app(&self) -> App<AppMessage>;
     fn open(
         &self,
         window: WindowAttributes,
@@ -21,7 +24,10 @@ pub trait ApplicationSealed {
     ) -> Result<Option<Arc<winit::window::Window>>, OsError>;
 }
 
-pub enum AppMessage {
+pub enum EventLoopMessage<AppMessage>
+where
+    AppMessage: Message,
+{
     OpenWindow {
         attrs: WindowAttributes,
         sender: mpsc::SyncSender<WindowMessage>,
@@ -29,6 +35,10 @@ pub enum AppMessage {
     },
     CloseWindow(WindowId),
     WindowPanic(WindowId),
+    User {
+        message: AppMessage,
+        response_sender: mpsc::SyncSender<AppMessage::Response>,
+    },
 }
 
 #[derive(Debug)]

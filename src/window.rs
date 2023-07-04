@@ -15,12 +15,11 @@ use winit::event::{
 use winit::window::{Fullscreen, Icon, Theme, WindowButtons, WindowId, WindowLevel};
 
 use crate::private::{self, WindowEvent};
-use crate::{App, AppMessage, Application, PendingApp, WindowMessage};
+use crate::{App, Application, EventLoopMessage, Message, PendingApp, WindowMessage, Windows};
 
 /// A weak reference to a running window.
 #[derive(Clone)]
 pub struct Window {
-    app: App,
     id: WindowId,
 }
 
@@ -29,13 +28,6 @@ impl Window {
     #[must_use]
     pub const fn id(&self) -> WindowId {
         self.id
-    }
-
-    /// Returns a clone of the winit [`Window`](winit::window::Window) if the
-    /// window is still open.
-    #[must_use]
-    pub fn winit(&self) -> Option<Arc<winit::window::Window>> {
-        self.app.windows.get(self.id)
     }
 }
 
@@ -46,17 +38,20 @@ impl Window {
 /// supports the cross-platform interface. Support for additional
 /// platform-specific settings may be possible as long as all types introduced
 /// are `Send`.
-pub struct WindowBuilder<'a, Behavior, Application>
+pub struct WindowBuilder<'a, Behavior, Application, AppMessage>
 where
-    Behavior: self::WindowBehavior,
+    Behavior: self::WindowBehavior<AppMessage>,
+    AppMessage: Message,
 {
     owner: &'a Application,
     context: Behavior::Context,
     attributes: WindowAttributes,
 }
-impl<'a, Behavior, Application> Deref for WindowBuilder<'a, Behavior, Application>
+impl<'a, Behavior, Application, AppMessage> Deref
+    for WindowBuilder<'a, Behavior, Application, AppMessage>
 where
-    Behavior: self::WindowBehavior,
+    Behavior: self::WindowBehavior<AppMessage>,
+    AppMessage: Message,
 {
     type Target = WindowAttributes;
 
@@ -65,9 +60,11 @@ where
     }
 }
 
-impl<'a, Behavior, Application> DerefMut for WindowBuilder<'a, Behavior, Application>
+impl<'a, Behavior, Application, AppMessage> DerefMut
+    for WindowBuilder<'a, Behavior, Application, AppMessage>
 where
-    Behavior: self::WindowBehavior,
+    Behavior: self::WindowBehavior<AppMessage>,
+    AppMessage: Message,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.attributes
@@ -124,10 +121,11 @@ impl Default for WindowAttributes {
     }
 }
 
-impl<'a, Behavior, Application> WindowBuilder<'a, Behavior, Application>
+impl<'a, Behavior, Application, AppMessage> WindowBuilder<'a, Behavior, Application, AppMessage>
 where
-    Behavior: self::WindowBehavior,
-    Application: crate::Application,
+    Behavior: self::WindowBehavior<AppMessage>,
+    Application: crate::Application<AppMessage>,
+    AppMessage: Message,
 {
     pub(crate) fn new(owner: &'a Application, context: Behavior::Context) -> Self {
         Self {
@@ -156,12 +154,10 @@ where
         let Some(winit) = self.owner.open(self.attributes, sender)? else {
             return Ok(None)
         };
-        let window = Window {
-            id: winit.id(),
-            app: self.owner.app(),
-        };
+        let window = Window { id: winit.id() };
         let running_window = RunningWindow {
             messages: receiver,
+            responses: mpsc::sync_channel(1),
             app: self.owner.app(),
             occluded: winit.is_visible().unwrap_or(false),
             focused: winit.has_focus(),
@@ -185,11 +181,18 @@ where
 }
 
 /// A window that is running in its own thread.
-pub struct RunningWindow {
+pub struct RunningWindow<AppMessage>
+where
+    AppMessage: Message,
+{
     window: Arc<winit::window::Window>,
     next_redraw_target: Option<RedrawTarget>,
     messages: mpsc::Receiver<WindowMessage>,
-    app: App,
+    responses: (
+        mpsc::SyncSender<AppMessage::Response>,
+        mpsc::Receiver<AppMessage::Response>,
+    ),
+    app: App<AppMessage>,
     inner_size: PhysicalSize<u32>,
     location: PhysicalPosition<i32>,
     cursor_location: Option<PhysicalPosition<f64>>,
@@ -203,7 +206,10 @@ pub struct RunningWindow {
     modifiers: ModifiersState,
 }
 
-impl RunningWindow {
+impl<AppMessage> RunningWindow<AppMessage>
+where
+    AppMessage: Message,
+{
     /// Returns a reference to the underlying window.
     #[must_use]
     pub fn winit(&self) -> &winit::window::Window {
@@ -300,7 +306,7 @@ impl RunningWindow {
 
     fn run_with<Behavior>(mut self, context: Behavior::Context)
     where
-        Behavior: self::WindowBehavior,
+        Behavior: self::WindowBehavior<AppMessage>,
     {
         let proxy = self.app.proxy.clone();
         let window_id = self.window.id();
@@ -318,16 +324,16 @@ impl RunningWindow {
 
         //
         if let Err(panic) = possible_panic {
-            let _result = proxy.send_event(AppMessage::WindowPanic(window_id));
+            let _result = proxy.send_event(EventLoopMessage::WindowPanic(window_id));
             std::panic::resume_unwind(panic)
         } else {
-            let _result = proxy.send_event(AppMessage::CloseWindow(window_id));
+            let _result = proxy.send_event(EventLoopMessage::CloseWindow(window_id));
         }
     }
 
     fn process_messages_until_redraw<Behavior>(&mut self, behavior: &mut Behavior) -> bool
     where
-        Behavior: self::WindowBehavior,
+        Behavior: self::WindowBehavior<AppMessage>,
     {
         loop {
             let message = match TimeUntilRedraw::from(self.next_redraw_target) {
@@ -364,7 +370,7 @@ impl RunningWindow {
     #[allow(clippy::too_many_lines)] // can't avoid the match
     fn handle_message<Behavior>(&mut self, message: WindowMessage, behavior: &mut Behavior) -> bool
     where
-        Behavior: self::WindowBehavior,
+        Behavior: self::WindowBehavior<AppMessage>,
     {
         match message {
             WindowMessage::Redraw => {
@@ -559,10 +565,27 @@ impl RunningWindow {
     }
 }
 
-impl Application for RunningWindow {}
+impl<AppMessage> Application<AppMessage> for RunningWindow<AppMessage>
+where
+    AppMessage: Message,
+{
+    fn send(&mut self, message: AppMessage) -> Option<<AppMessage as Message>::Response> {
+        self.app
+            .proxy
+            .send_event(EventLoopMessage::User {
+                message,
+                response_sender: self.responses.0.clone(),
+            })
+            .ok()?;
+        self.responses.1.recv().ok()
+    }
+}
 
-impl private::ApplicationSealed for RunningWindow {
-    fn app(&self) -> App {
+impl<AppMessage> private::ApplicationSealed<AppMessage> for RunningWindow<AppMessage>
+where
+    AppMessage: Message,
+{
+    fn app(&self) -> App<AppMessage> {
         self.app.clone()
     }
 
@@ -575,7 +598,7 @@ impl private::ApplicationSealed for RunningWindow {
         if self
             .app
             .proxy
-            .send_event(AppMessage::OpenWindow {
+            .send_event(EventLoopMessage::OpenWindow {
                 attrs,
                 sender,
                 open_sender,
@@ -623,7 +646,10 @@ enum TimeUntilRedraw {
 /// consumers of the libraries. This trait provides functions for each of the
 /// events a window may receive, enabling the type to react and update its
 /// state.
-pub trait WindowBehavior: UnwindSafe + Sized + 'static {
+pub trait WindowBehavior<AppMessage>: UnwindSafe + Sized + 'static
+where
+    AppMessage: Message,
+{
     /// A type that is passed to [`initialize()`](Self::initialize).
     ///
     /// This allows providing data to the window from the thread that is opening
@@ -632,9 +658,9 @@ pub trait WindowBehavior: UnwindSafe + Sized + 'static {
 
     /// Returns a new window builder for this behavior. When the window is
     /// initialized, a default [`Context`](Self::Context) will be passed.
-    fn build<App>(app: &App) -> WindowBuilder<'_, Self, App>
+    fn build<App>(app: &App) -> WindowBuilder<'_, Self, App, AppMessage>
     where
-        App: Application,
+        App: Application<AppMessage>,
         Self::Context: Default,
     {
         Self::build_with(app, <Self::Context as Default>::default())
@@ -642,11 +668,51 @@ pub trait WindowBehavior: UnwindSafe + Sized + 'static {
 
     /// Returns a new window builder for this behavior. When the window is
     /// initialized, the provided context will be passed.
-    fn build_with<App>(app: &App, context: Self::Context) -> WindowBuilder<'_, Self, App>
+    fn build_with<App>(
+        app: &App,
+        context: Self::Context,
+    ) -> WindowBuilder<'_, Self, App, AppMessage>
     where
-        App: Application,
+        App: Application<AppMessage>,
     {
         WindowBuilder::new(app, context)
+    }
+
+    /// Runs a window with a default instance of this behavior's
+    /// [`Context`](Self::Context).
+    ///
+    /// This function is shorthand for creating a [`PendingApp`], opening this
+    /// window inside of it, and running the pending app.
+    ///
+    /// Messages can be sent to the application's main thread using
+    /// [`Application::send`]. Each time a message is received by the main event
+    /// loop, `app_callback` will be invoked.
+    fn run_with_event_callback(
+        app_callback: impl FnMut(AppMessage, &Windows<AppMessage>) -> AppMessage::Response + 'static,
+    ) -> !
+    where
+        Self::Context: Default,
+    {
+        let app = PendingApp::new_with_event_callback(app_callback);
+        Self::open(&app).expect("error opening initial window");
+        app.run()
+    }
+
+    /// Runs a window with the provided [`Context`](Self::Context).
+    ///
+    /// This function is shorthand for creating a [`PendingApp`], opening this
+    /// window inside of it, and running the pending app.
+    ///
+    /// Messages can be sent to the application's main thread using
+    /// [`Application::send`]. Each time a message is received by the main event
+    /// loop, `app_callback` will be invoked.
+    fn run_with_context_and_event_callback(
+        context: Self::Context,
+        app_callback: impl FnMut(AppMessage, &Windows<AppMessage>) -> AppMessage::Response + 'static,
+    ) -> ! {
+        let app = PendingApp::new_with_event_callback(app_callback);
+        Self::open_with(&app, context).expect("error opening initial window");
+        app.run()
     }
 
     /// Opens a new window with a default instance of this behavior's
@@ -661,7 +727,7 @@ pub trait WindowBehavior: UnwindSafe + Sized + 'static {
     /// [`winit::window::WindowBuilder::build`].
     fn open<App>(app: &App) -> Result<Option<Window>, OsError>
     where
-        App: Application,
+        App: Application<AppMessage>,
         Self::Context: Default,
     {
         Self::build(app).open()
@@ -679,11 +745,183 @@ pub trait WindowBehavior: UnwindSafe + Sized + 'static {
     /// [`winit::window::WindowBuilder::build`].
     fn open_with<App>(app: &App, context: Self::Context) -> Result<Option<Window>, OsError>
     where
-        App: Application,
+        App: Application<AppMessage>,
     {
         Self::build_with(app, context).open()
     }
 
+    /// Returns a new instance of this behavior after initializing itself with
+    /// the window and context.
+    fn initialize(window: &mut RunningWindow<AppMessage>, context: Self::Context) -> Self;
+
+    /// Displays the contents of the window.
+    fn redraw(&mut self, window: &mut RunningWindow<AppMessage>);
+
+    /// The window has been requested to be closed. This can happen as a result
+    /// of the user clicking the close button.
+    ///
+    /// If the window should be closed, return true. To prevent closing the
+    /// window, return false.
+    #[allow(unused_variables)]
+    fn close_requested(&mut self, window: &mut RunningWindow<AppMessage>) -> bool {
+        true
+    }
+
+    /// The window has gained or lost keyboard focus.
+    /// [`RunningWindow::focused()`] returns the current state.
+    #[allow(unused_variables)]
+    fn focus_changed(&mut self, window: &mut RunningWindow<AppMessage>) {}
+
+    /// The window has been occluded or revealed. [`RunningWindow::occluded()`]
+    /// returns the current state.
+    #[allow(unused_variables)]
+    fn occlusion_changed(&mut self, window: &mut RunningWindow<AppMessage>) {}
+
+    /// The window's scale factor has changed. [`RunningWindow::scale()`]
+    /// returns the current scale.
+    #[allow(unused_variables)]
+    fn scale_factor_changed(&mut self, window: &mut RunningWindow<AppMessage>) {}
+
+    /// The window has been resized. [`RunningWindow::inner_size()`]
+    /// returns the current size.
+    #[allow(unused_variables)]
+    fn resized(&mut self, window: &mut RunningWindow<AppMessage>) {}
+
+    /// The window's theme has been updated. [`RunningWindow::theme()`]
+    /// returns the current theme.
+    #[allow(unused_variables)]
+    fn theme_changed(&mut self, window: &mut RunningWindow<AppMessage>) {}
+
+    /// A file has been dropped on the window.
+    #[allow(unused_variables)]
+    fn dropped_file(&mut self, window: &mut RunningWindow<AppMessage>, path: PathBuf) {}
+
+    /// A file is hovering over the window.
+    #[allow(unused_variables)]
+    fn hovered_file(&mut self, window: &mut RunningWindow<AppMessage>, path: PathBuf) {}
+
+    /// A file being overed has been cancelled.
+    #[allow(unused_variables)]
+    fn hovered_file_cancelled(&mut self, window: &mut RunningWindow<AppMessage>) {}
+
+    /// An input event has generated a character.
+    #[allow(unused_variables)]
+    fn received_character(&mut self, window: &mut RunningWindow<AppMessage>, char: char) {}
+
+    /// A keyboard event occurred while the window was focused.
+    #[allow(unused_variables)]
+    fn keyboard_input(
+        &mut self,
+        window: &mut RunningWindow<AppMessage>,
+        device_id: DeviceId,
+        input: KeyboardInput,
+        is_synthetic: bool,
+    ) {
+    }
+
+    /// The keyboard modifier keys have changed. [`RunningWindow::modifiers()`]
+    /// returns the current modifier keys state.
+    #[allow(unused_variables)]
+    fn modifiers_changed(&mut self, window: &mut RunningWindow<AppMessage>) {}
+
+    /// An international input even thas occurred for the window.
+    #[allow(unused_variables)]
+    fn ime(&mut self, window: &mut RunningWindow<AppMessage>, ime: Ime) {}
+
+    /// A cursor has moved over the window.
+    #[allow(unused_variables)]
+    fn cursor_moved(
+        &mut self,
+        window: &mut RunningWindow<AppMessage>,
+        device_id: DeviceId,
+        position: PhysicalPosition<f64>,
+    ) {
+    }
+
+    /// A cursor has hovered over the window.
+    #[allow(unused_variables)]
+    fn cursor_entered(&mut self, window: &mut RunningWindow<AppMessage>, device_id: DeviceId) {}
+
+    /// A cursor is no longer hovering over the window.
+    #[allow(unused_variables)]
+    fn cursor_left(&mut self, window: &mut RunningWindow<AppMessage>, device_id: DeviceId) {}
+
+    /// An event from a mouse wheel.
+    #[allow(unused_variables)]
+    fn mouse_wheel(
+        &mut self,
+        window: &mut RunningWindow<AppMessage>,
+        device_id: DeviceId,
+        delta: MouseScrollDelta,
+        phase: TouchPhase,
+    ) {
+    }
+
+    /// A mouse button was pressed or released.
+    #[allow(unused_variables)]
+    fn mouse_input(
+        &mut self,
+        window: &mut RunningWindow<AppMessage>,
+        device_id: DeviceId,
+        state: ElementState,
+        button: MouseButton,
+    ) {
+    }
+
+    /// A pressure-sensitive touchpad was touched.
+    #[allow(unused_variables)]
+    fn touchpad_pressure(
+        &mut self,
+        window: &mut RunningWindow<AppMessage>,
+        device_id: DeviceId,
+        pressure: f32,
+        stage: i64,
+    ) {
+    }
+
+    /// A multi-axis input device has registered motion.
+    #[allow(unused_variables)]
+    fn axis_motion(
+        &mut self,
+        window: &mut RunningWindow<AppMessage>,
+        device_id: DeviceId,
+        axis: AxisId,
+        value: f64,
+    ) {
+    }
+
+    /// A touch event.
+    #[allow(unused_variables)]
+    fn touch(&mut self, window: &mut RunningWindow<AppMessage>, touch: Touch) {}
+
+    /// A touchpad-originated magnification gesture.
+    #[allow(unused_variables)]
+    fn touchpad_magnify(
+        &mut self,
+        window: &mut RunningWindow<AppMessage>,
+        device_id: DeviceId,
+        delta: f64,
+        phase: TouchPhase,
+    ) {
+    }
+
+    /// A request to smart-magnify the window.
+    #[allow(unused_variables)]
+    fn smart_magnify(&mut self, window: &mut RunningWindow<AppMessage>, device_id: DeviceId) {}
+
+    /// A touchpad-originated rotation gesture.
+    #[allow(unused_variables)]
+    fn touchpad_rotate(
+        &mut self,
+        window: &mut RunningWindow<AppMessage>,
+        device_id: DeviceId,
+        delta: f32,
+        phase: TouchPhase,
+    ) {
+    }
+}
+
+pub trait Run: WindowBehavior<()> {
     /// Runs a window with a default instance of this behavior's
     /// [`Context`](Self::Context).
     ///
@@ -707,174 +945,6 @@ pub trait WindowBehavior: UnwindSafe + Sized + 'static {
         Self::open_with(&app, context).expect("error opening initial window");
         app.run()
     }
-
-    /// Returns a new instance of this behavior after initializing itself with
-    /// the window and context.
-    fn initialize(window: &mut RunningWindow, context: Self::Context) -> Self;
-
-    /// Displays the contents of the window.
-    fn redraw(&mut self, window: &mut RunningWindow);
-
-    /// The window has been requested to be closed. This can happen as a result
-    /// of the user clicking the close button.
-    ///
-    /// If the window should be closed, return true. To prevent closing the
-    /// window, return false.
-    #[allow(unused_variables)]
-    fn close_requested(&mut self, window: &mut RunningWindow) -> bool {
-        true
-    }
-
-    /// The window has gained or lost keyboard focus.
-    /// [`RunningWindow::focused()`] returns the current state.
-    #[allow(unused_variables)]
-    fn focus_changed(&mut self, window: &mut RunningWindow) {}
-
-    /// The window has been occluded or revealed. [`RunningWindow::occluded()`]
-    /// returns the current state.
-    #[allow(unused_variables)]
-    fn occlusion_changed(&mut self, window: &mut RunningWindow) {}
-
-    /// The window's scale factor has changed. [`RunningWindow::scale()`]
-    /// returns the current scale.
-    #[allow(unused_variables)]
-    fn scale_factor_changed(&mut self, window: &mut RunningWindow) {}
-
-    /// The window has been resized. [`RunningWindow::inner_size()`]
-    /// returns the current size.
-    #[allow(unused_variables)]
-    fn resized(&mut self, window: &mut RunningWindow) {}
-
-    /// The window's theme has been updated. [`RunningWindow::theme()`]
-    /// returns the current theme.
-    #[allow(unused_variables)]
-    fn theme_changed(&mut self, window: &mut RunningWindow) {}
-
-    /// A file has been dropped on the window.
-    #[allow(unused_variables)]
-    fn dropped_file(&mut self, window: &mut RunningWindow, path: PathBuf) {}
-
-    /// A file is hovering over the window.
-    #[allow(unused_variables)]
-    fn hovered_file(&mut self, window: &mut RunningWindow, path: PathBuf) {}
-
-    /// A file being overed has been cancelled.
-    #[allow(unused_variables)]
-    fn hovered_file_cancelled(&mut self, window: &mut RunningWindow) {}
-
-    /// An input event has generated a character.
-    #[allow(unused_variables)]
-    fn received_character(&mut self, window: &mut RunningWindow, char: char) {}
-
-    /// A keyboard event occurred while the window was focused.
-    #[allow(unused_variables)]
-    fn keyboard_input(
-        &mut self,
-        window: &mut RunningWindow,
-        device_id: DeviceId,
-        input: KeyboardInput,
-        is_synthetic: bool,
-    ) {
-    }
-
-    /// The keyboard modifier keys have changed. [`RunningWindow::modifiers()`]
-    /// returns the current modifier keys state.
-    #[allow(unused_variables)]
-    fn modifiers_changed(&mut self, window: &mut RunningWindow) {}
-
-    /// An international input even thas occurred for the window.
-    #[allow(unused_variables)]
-    fn ime(&mut self, window: &mut RunningWindow, ime: Ime) {}
-
-    /// A cursor has moved over the window.
-    #[allow(unused_variables)]
-    fn cursor_moved(
-        &mut self,
-        window: &mut RunningWindow,
-        device_id: DeviceId,
-        position: PhysicalPosition<f64>,
-    ) {
-    }
-
-    /// A cursor has hovered over the window.
-    #[allow(unused_variables)]
-    fn cursor_entered(&mut self, window: &mut RunningWindow, device_id: DeviceId) {}
-
-    /// A cursor is no longer hovering over the window.
-    #[allow(unused_variables)]
-    fn cursor_left(&mut self, window: &mut RunningWindow, device_id: DeviceId) {}
-
-    /// An event from a mouse wheel.
-    #[allow(unused_variables)]
-    fn mouse_wheel(
-        &mut self,
-        window: &mut RunningWindow,
-        device_id: DeviceId,
-        delta: MouseScrollDelta,
-        phase: TouchPhase,
-    ) {
-    }
-
-    /// A mouse button was pressed or released.
-    #[allow(unused_variables)]
-    fn mouse_input(
-        &mut self,
-        window: &mut RunningWindow,
-        device_id: DeviceId,
-        state: ElementState,
-        button: MouseButton,
-    ) {
-    }
-
-    /// A pressure-sensitive touchpad was touched.
-    #[allow(unused_variables)]
-    fn touchpad_pressure(
-        &mut self,
-        window: &mut RunningWindow,
-        device_id: DeviceId,
-        pressure: f32,
-        stage: i64,
-    ) {
-    }
-
-    /// A multi-axis input device has registered motion.
-    #[allow(unused_variables)]
-    fn axis_motion(
-        &mut self,
-        window: &mut RunningWindow,
-        device_id: DeviceId,
-        axis: AxisId,
-        value: f64,
-    ) {
-    }
-
-    /// A touch event.
-    #[allow(unused_variables)]
-    fn touch(&mut self, window: &mut RunningWindow, touch: Touch) {}
-
-    /// A touchpad-originated magnification gesture.
-    #[allow(unused_variables)]
-    fn touchpad_magnify(
-        &mut self,
-        window: &mut RunningWindow,
-        device_id: DeviceId,
-        delta: f64,
-        phase: TouchPhase,
-    ) {
-    }
-
-    /// A request to smart-magnify the window.
-    #[allow(unused_variables)]
-    fn smart_magnify(&mut self, window: &mut RunningWindow, device_id: DeviceId) {}
-
-    /// A touchpad-originated rotation gesture.
-    #[allow(unused_variables)]
-    fn touchpad_rotate(
-        &mut self,
-        window: &mut RunningWindow,
-        device_id: DeviceId,
-        delta: f32,
-        phase: TouchPhase,
-    ) {
-    }
 }
+
+impl<T> Run for T where T: WindowBehavior<()> {}

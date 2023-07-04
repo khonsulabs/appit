@@ -15,30 +15,52 @@ use winit::error::OsError;
 use winit::window::WindowId;
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use winit::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
 use winit::{event::Event, event_loop::EventLoop};
 
-use crate::private::{AppMessage, WindowEvent, WindowMessage};
+use crate::private::{EventLoopMessage, WindowEvent, WindowMessage};
 use crate::window::WindowAttributes;
 
 /// An application that is not yet running.
-pub struct PendingApp {
-    event_loop: EventLoop<AppMessage>,
-    running: App,
+pub struct PendingApp<AppMessage>
+where
+    AppMessage: Message,
+{
+    event_loop: EventLoop<EventLoopMessage<AppMessage>>,
+    message_callback: BoxedEventCallback<AppMessage>,
+    running: App<AppMessage>,
 }
 
-impl Default for PendingApp {
+type BoxedEventCallback<AppMessage> =
+    Box<dyn FnMut(AppMessage, &Windows<AppMessage>) -> <AppMessage as Message>::Response>;
+
+impl Default for PendingApp<()> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PendingApp {
+impl PendingApp<()> {
     /// Returns a new app with no windows. If no windows are opened before the
     /// app is run, the app will immediately close.
     #[must_use]
     pub fn new() -> Self {
+        Self::new_with_event_callback(|_, _| {})
+    }
+}
+
+impl<AppMessage> PendingApp<AppMessage>
+where
+    AppMessage: Message,
+{
+    /// Returns a new app with no windows. If no windows are opened before the
+    /// app is run, the app will immediately close.
+    #[must_use]
+    pub fn new_with_event_callback(
+        event_callback: impl FnMut(AppMessage, &Windows<AppMessage>) -> AppMessage::Response + 'static,
+    ) -> Self {
         let event_loop = EventLoopBuilder::with_user_event().build();
         let proxy = event_loop.create_proxy();
         Self {
@@ -47,13 +69,14 @@ impl PendingApp {
                 proxy,
                 windows: Windows::default(),
             },
+            message_callback: Box::new(event_callback),
         }
     }
 
     /// Begins running the application. This function will never return.
     ///
     /// Internally this runs the [`EventLoop`].
-    pub fn run(self) -> ! {
+    pub fn run(mut self) -> ! {
         self.event_loop.run(move |event, target, control_flow| {
             *control_flow = ControlFlow::Wait;
             match event {
@@ -67,23 +90,30 @@ impl PendingApp {
                     self.running.windows.send(window_id, WindowMessage::Redraw);
                 }
                 Event::UserEvent(message) => match message {
-                    AppMessage::CloseWindow(window_id) => {
+                    EventLoopMessage::CloseWindow(window_id) => {
                         if self.running.windows.close(window_id) {
                             *control_flow = ControlFlow::ExitWithCode(0);
                         }
                     }
-                    AppMessage::WindowPanic(window_id) => {
+                    EventLoopMessage::WindowPanic(window_id) => {
                         if self.running.windows.close(window_id) {
                             *control_flow = ControlFlow::ExitWithCode(1);
                         }
                     }
-                    AppMessage::OpenWindow {
+                    EventLoopMessage::OpenWindow {
                         attrs,
                         sender,
                         open_sender,
                     } => {
                         let result = self.running.windows.open(target, attrs, sender);
                         let _result = open_sender.send(result);
+                    }
+                    EventLoopMessage::User {
+                        message,
+                        response_sender,
+                    } => {
+                        let _result = response_sender
+                            .send((self.message_callback)(message, &self.running.windows));
                     }
                 },
                 Event::NewEvents(_)
@@ -99,19 +129,64 @@ impl PendingApp {
 }
 
 /// A reference to a multi-window application.
-#[derive(Clone)]
-pub struct App {
-    proxy: EventLoopProxy<AppMessage>,
-    windows: Windows,
+pub struct App<AppMessage>
+where
+    AppMessage: Message,
+{
+    proxy: EventLoopProxy<EventLoopMessage<AppMessage>>,
+    windows: Windows<AppMessage>,
+}
+
+impl<AppMessage> Clone for App<AppMessage>
+where
+    AppMessage: Message,
+{
+    fn clone(&self) -> Self {
+        Self {
+            proxy: self.proxy.clone(),
+            windows: self.windows.clone(),
+        }
+    }
 }
 
 /// A type that has a handle to the application thread.
-pub trait Application: private::ApplicationSealed {}
+pub trait Application<AppMessage>: private::ApplicationSealed<AppMessage>
+where
+    AppMessage: Message,
+{
+    /// Sends an app message to the main event loop to be handled by the
+    /// callback provided when the app was created.
+    ///
+    /// This function will return None if the main event loop is no longer
+    /// running. Otherwise, this function will block until the result of the
+    /// callback has been received.
+    fn send(&mut self, message: AppMessage) -> Option<AppMessage::Response>;
+}
 
-impl Application for PendingApp {}
+/// A message with an associated response type.
+pub trait Message: Send + 'static {
+    /// The type returned when responding to this message.
+    type Response: Send;
+}
 
-impl private::ApplicationSealed for PendingApp {
-    fn app(&self) -> App {
+impl Message for () {
+    type Response = ();
+}
+
+impl<AppMessage> Application<AppMessage> for PendingApp<AppMessage>
+where
+    AppMessage: Message,
+{
+    fn send(&mut self, message: AppMessage) -> Option<<AppMessage as Message>::Response> {
+        Some((self.message_callback)(message, &self.running.windows))
+    }
+}
+
+impl<AppMessage> private::ApplicationSealed<AppMessage> for PendingApp<AppMessage>
+where
+    AppMessage: Message,
+{
+    fn app(&self) -> App<AppMessage> {
         self.running.clone()
     }
 
@@ -127,13 +202,37 @@ impl private::ApplicationSealed for PendingApp {
     }
 }
 
-#[derive(Default, Clone)]
-struct Windows {
+/// A collection of open windows.
+pub struct Windows<AppMessage> {
     data: Arc<Mutex<HashMap<WindowId, OpenWindow>>>,
+    _message: PhantomData<AppMessage>,
 }
 
-impl Windows {
-    fn get(&self, id: WindowId) -> Option<Arc<winit::window::Window>> {
+impl<AppMessage> Default for Windows<AppMessage> {
+    fn default() -> Self {
+        Self {
+            data: Arc::default(),
+            _message: PhantomData,
+        }
+    }
+}
+
+impl<AppMessage> Clone for Windows<AppMessage> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            _message: PhantomData,
+        }
+    }
+}
+
+impl<AppMessage> Windows<AppMessage>
+where
+    AppMessage: Message,
+{
+    /// Gets an instance of the winit window for the given window id, if it is
+    /// still open.
+    pub fn get(&self, id: WindowId) -> Option<Arc<winit::window::Window>> {
         let windows = self.data.lock().map_or_else(PoisonError::into_inner, |g| g);
         windows.get(&id).map(|w| w.winit.clone())
     }
@@ -141,7 +240,7 @@ impl Windows {
     #[allow(unsafe_code)]
     fn open(
         &self,
-        target: &EventLoopWindowTarget<AppMessage>,
+        target: &EventLoopWindowTarget<EventLoopMessage<AppMessage>>,
         attrs: WindowAttributes,
         sender: mpsc::SyncSender<WindowMessage>,
     ) -> Result<Arc<winit::window::Window>, OsError> {
@@ -198,7 +297,7 @@ impl Windows {
         Ok(winit)
     }
 
-    pub fn send(&self, window: WindowId, message: WindowMessage) {
+    fn send(&self, window: WindowId, message: WindowMessage) {
         let mut data = self.data.lock().map_or_else(PoisonError::into_inner, |g| g);
         if let Some(open_window) = data.get(&window) {
             match open_window.sender.try_send(message) {
@@ -214,7 +313,7 @@ impl Windows {
         }
     }
 
-    pub fn close(&self, window: WindowId) -> bool {
+    fn close(&self, window: WindowId) -> bool {
         let mut data = self.data.lock().map_or_else(PoisonError::into_inner, |g| g);
         data.remove(&window);
         data.is_empty()
