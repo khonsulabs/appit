@@ -10,17 +10,16 @@ use winit::event::{
 use winit::window::{Theme, WindowId};
 
 use crate::window::WindowAttributes;
-use crate::{App, Message};
+use crate::Message;
 
 pub trait ApplicationSealed<AppMessage>
 where
     AppMessage: Message,
 {
-    fn app(&self) -> App<AppMessage>;
     fn open(
         &self,
-        window: WindowAttributes,
-        sender: mpsc::SyncSender<WindowMessage>,
+        window: WindowAttributes<AppMessage::Window>,
+        sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
     ) -> Result<Option<Arc<winit::window::Window>>, OsError>;
 }
 
@@ -29,8 +28,8 @@ where
     AppMessage: Message,
 {
     OpenWindow {
-        attrs: WindowAttributes,
-        sender: mpsc::SyncSender<WindowMessage>,
+        attrs: WindowAttributes<AppMessage::Window>,
+        sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
         open_sender: mpsc::SyncSender<Result<Arc<winit::window::Window>, OsError>>,
     },
     CloseWindow(WindowId),
@@ -42,8 +41,9 @@ where
 }
 
 #[derive(Debug)]
-pub enum WindowMessage {
+pub enum WindowMessage<User> {
     Redraw,
+    User(User),
     Event(WindowEvent),
 }
 

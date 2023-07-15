@@ -18,16 +18,34 @@ use crate::private::{self, WindowEvent};
 use crate::{App, Application, EventLoopMessage, Message, PendingApp, WindowMessage, Windows};
 
 /// A weak reference to a running window.
-#[derive(Clone)]
-pub struct Window {
+#[derive(Debug, Clone)]
+pub struct Window<Message> {
     id: WindowId,
+    sender: mpsc::SyncSender<WindowMessage<Message>>,
 }
 
-impl Window {
+impl<Message> Window<Message> {
     /// Returns the winit id of the window.
     #[must_use]
     pub const fn id(&self) -> WindowId {
         self.id
+    }
+
+    /// Sends a message to the window.
+    ///
+    /// Returns `Ok` if the message was successfully sent. The message may not
+    /// be received even if this function returns `Ok`, if the window closes
+    /// between when the message was sent and when the message is received.
+    ///
+    /// # Errors
+    ///
+    /// If the window is already closed, this function returns `Err(message)`.
+    pub fn send(&self, message: Message) -> Result<(), Message> {
+        match self.sender.send(WindowMessage::User(message)) {
+            Ok(()) => Ok(()),
+            Err(mpsc::SendError(WindowMessage::User(message))) => Err(message),
+            _ => unreachable!("same input as output"),
+        }
     }
 }
 
@@ -45,7 +63,7 @@ where
 {
     owner: &'a Application,
     context: Behavior::Context,
-    attributes: WindowAttributes,
+    attributes: WindowAttributes<AppMessage::Window>,
 }
 impl<'a, Behavior, Application, AppMessage> Deref
     for WindowBuilder<'a, Behavior, Application, AppMessage>
@@ -53,7 +71,7 @@ where
     Behavior: self::WindowBehavior<AppMessage>,
     AppMessage: Message,
 {
-    type Target = WindowAttributes;
+    type Target = WindowAttributes<AppMessage::Window>;
 
     fn deref(&self) -> &Self::Target {
         &self.attributes
@@ -72,7 +90,7 @@ where
 }
 
 #[allow(clippy::struct_excessive_bools)]
-pub struct WindowAttributes {
+pub struct WindowAttributes<ParentWindowEvent> {
     pub inner_size: Option<Size>,
     pub min_inner_size: Option<Size>,
     pub max_inner_size: Option<Size>,
@@ -90,11 +108,11 @@ pub struct WindowAttributes {
     pub resize_increments: Option<Size>,
     pub content_protected: bool,
     pub window_level: WindowLevel,
-    pub parent_window: Option<Window>,
+    pub parent_window: Option<Window<ParentWindowEvent>>,
     pub active: bool,
 }
 
-impl Default for WindowAttributes {
+impl<User> Default for WindowAttributes<User> {
     fn default() -> Self {
         let defaults = winit::window::WindowAttributes::default();
         Self {
@@ -145,18 +163,21 @@ where
     ///
     /// The only errors this funciton can return arise from
     /// [`winit::window::WindowBuilder::build`].
-    pub fn open(self) -> Result<Option<Window>, winit::error::OsError> {
+    pub fn open(self) -> Result<Option<Window<AppMessage::Window>>, winit::error::OsError> {
         // The window's thread shouldn't ever block for long periods of time. To
         // avoid a "frozen" window causing massive memory allocations, we'll use
         // a fixed-size channel and be cautious to not block the main event loop
         // by always using try_send.
         let (sender, receiver) = mpsc::sync_channel(1024);
-        let Some(winit) = self.owner.open(self.attributes, sender)? else {
+        let Some(winit) = self.owner.open(self.attributes, sender.clone())? else {
             return Ok(None)
         };
-        let window = Window { id: winit.id() };
+        let window = Window {
+            id: winit.id(),
+            sender: sender.clone(),
+        };
         let running_window = RunningWindow {
-            messages: receiver,
+            messages: (sender, receiver),
             responses: mpsc::sync_channel(1),
             app: self.owner.app(),
             occluded: winit.is_visible().unwrap_or(false),
@@ -180,6 +201,8 @@ where
     }
 }
 
+type SyncChannel<T> = (mpsc::SyncSender<T>, mpsc::Receiver<T>);
+
 /// A window that is running in its own thread.
 pub struct RunningWindow<AppMessage>
 where
@@ -187,11 +210,8 @@ where
 {
     window: Arc<winit::window::Window>,
     next_redraw_target: Option<RedrawTarget>,
-    messages: mpsc::Receiver<WindowMessage>,
-    responses: (
-        mpsc::SyncSender<AppMessage::Response>,
-        mpsc::Receiver<AppMessage::Response>,
-    ),
+    messages: SyncChannel<WindowMessage<AppMessage::Window>>,
+    responses: SyncChannel<AppMessage::Response>,
     app: App<AppMessage>,
     inner_size: PhysicalSize<u32>,
     location: PhysicalPosition<i32>,
@@ -214,6 +234,15 @@ where
     #[must_use]
     pub fn winit(&self) -> &winit::window::Window {
         &self.window
+    }
+
+    /// Returns a handle to this window.
+    #[must_use]
+    pub fn handle(&self) -> Window<AppMessage::Window> {
+        Window {
+            id: self.window.id(),
+            sender: self.messages.0.clone(),
+        }
     }
 
     /// Returns the target for when the window will be redrawn.
@@ -340,7 +369,7 @@ where
                 // The scheduled redraw time has already elapsed, or we need to
                 // redraw. Process messages that are already enqueued, but don't
                 // block.
-                TimeUntilRedraw::None => match self.messages.try_recv() {
+                TimeUntilRedraw::None => match self.messages.1.try_recv() {
                     Ok(message) => message,
                     Err(mpsc::TryRecvError::Disconnected) => return false,
                     Err(mpsc::TryRecvError::Empty) => return true,
@@ -348,14 +377,14 @@ where
                 // We have a scheduled time for the next frame, and it hasn't
                 // elapsed yet.
                 TimeUntilRedraw::Some(duration_remaining) => {
-                    match self.messages.recv_timeout(duration_remaining) {
+                    match self.messages.1.recv_timeout(duration_remaining) {
                         Ok(message) => message,
                         Err(mpsc::RecvTimeoutError::Timeout) => return true,
                         Err(mpsc::RecvTimeoutError::Disconnected) => return false,
                     }
                 }
                 // No scheduled redraw time, sleep until the next message.
-                TimeUntilRedraw::Indefinite => match self.messages.recv() {
+                TimeUntilRedraw::Indefinite => match self.messages.1.recv() {
                     Ok(message) => message,
                     Err(_) => return false,
                 },
@@ -368,7 +397,11 @@ where
     }
 
     #[allow(clippy::too_many_lines)] // can't avoid the match
-    fn handle_message<Behavior>(&mut self, message: WindowMessage, behavior: &mut Behavior) -> bool
+    fn handle_message<Behavior>(
+        &mut self,
+        message: WindowMessage<AppMessage::Window>,
+        behavior: &mut Behavior,
+    ) -> bool
     where
         Behavior: self::WindowBehavior<AppMessage>,
     {
@@ -376,6 +409,7 @@ where
             WindowMessage::Redraw => {
                 self.set_needs_redraw();
             }
+            WindowMessage::User(user) => behavior.event(self, user),
             WindowMessage::Event(evt) => match evt {
                 WindowEvent::CloseRequested => {
                     if behavior.close_requested(self) {
@@ -569,6 +603,10 @@ impl<AppMessage> Application<AppMessage> for RunningWindow<AppMessage>
 where
     AppMessage: Message,
 {
+    fn app(&self) -> App<AppMessage> {
+        self.app.clone()
+    }
+
     fn send(&mut self, message: AppMessage) -> Option<<AppMessage as Message>::Response> {
         self.app
             .proxy
@@ -585,14 +623,10 @@ impl<AppMessage> private::ApplicationSealed<AppMessage> for RunningWindow<AppMes
 where
     AppMessage: Message,
 {
-    fn app(&self) -> App<AppMessage> {
-        self.app.clone()
-    }
-
     fn open(
         &self,
-        attrs: WindowAttributes,
-        sender: mpsc::SyncSender<WindowMessage>,
+        attrs: WindowAttributes<AppMessage::Window>,
+        sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
     ) -> Result<Option<Arc<winit::window::Window>>, OsError> {
         let (open_sender, open_receiver) = mpsc::sync_channel(1);
         if self
@@ -688,7 +722,8 @@ where
     /// [`Application::send`]. Each time a message is received by the main event
     /// loop, `app_callback` will be invoked.
     fn run_with_event_callback(
-        app_callback: impl FnMut(AppMessage, &Windows<AppMessage>) -> AppMessage::Response + 'static,
+        app_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
+            + 'static,
     ) -> !
     where
         Self::Context: Default,
@@ -708,7 +743,8 @@ where
     /// loop, `app_callback` will be invoked.
     fn run_with_context_and_event_callback(
         context: Self::Context,
-        app_callback: impl FnMut(AppMessage, &Windows<AppMessage>) -> AppMessage::Response + 'static,
+        app_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
+            + 'static,
     ) -> ! {
         let app = PendingApp::new_with_event_callback(app_callback);
         Self::open_with(&app, context).expect("error opening initial window");
@@ -725,7 +761,7 @@ where
     ///
     /// The only errors this funciton can return arise from
     /// [`winit::window::WindowBuilder::build`].
-    fn open<App>(app: &App) -> Result<Option<Window>, OsError>
+    fn open<App>(app: &App) -> Result<Option<Window<AppMessage::Window>>, OsError>
     where
         App: Application<AppMessage>,
         Self::Context: Default,
@@ -743,7 +779,10 @@ where
     ///
     /// The only errors this funciton can return arise from
     /// [`winit::window::WindowBuilder::build`].
-    fn open_with<App>(app: &App, context: Self::Context) -> Result<Option<Window>, OsError>
+    fn open_with<App>(
+        app: &App,
+        context: Self::Context,
+    ) -> Result<Option<Window<AppMessage::Window>>, OsError>
     where
         App: Application<AppMessage>,
     {
@@ -919,6 +958,10 @@ where
         phase: TouchPhase,
     ) {
     }
+
+    /// A user event has been received by the window.
+    #[allow(unused_variables)]
+    fn event(&mut self, window: &mut RunningWindow<AppMessage>, event: AppMessage::Window) {}
 }
 
 pub trait Run: WindowBehavior<()> {

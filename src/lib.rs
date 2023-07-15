@@ -15,7 +15,6 @@ use winit::error::OsError;
 use winit::window::WindowId;
 
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use winit::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
 use winit::{event::Event, event_loop::EventLoop};
@@ -33,8 +32,12 @@ where
     running: App<AppMessage>,
 }
 
-type BoxedEventCallback<AppMessage> =
-    Box<dyn FnMut(AppMessage, &Windows<AppMessage>) -> <AppMessage as Message>::Response>;
+type BoxedEventCallback<AppMessage> = Box<
+    dyn FnMut(
+        AppMessage,
+        &Windows<<AppMessage as Message>::Window>,
+    ) -> <AppMessage as Message>::Response,
+>;
 
 impl Default for PendingApp<()> {
     fn default() -> Self {
@@ -59,7 +62,8 @@ where
     /// app is run, the app will immediately close.
     #[must_use]
     pub fn new_with_event_callback(
-        event_callback: impl FnMut(AppMessage, &Windows<AppMessage>) -> AppMessage::Response + 'static,
+        event_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
+            + 'static,
     ) -> Self {
         let event_loop = EventLoopBuilder::with_user_event().build();
         let proxy = event_loop.create_proxy();
@@ -134,7 +138,7 @@ where
     AppMessage: Message,
 {
     proxy: EventLoopProxy<EventLoopMessage<AppMessage>>,
-    windows: Windows<AppMessage>,
+    windows: Windows<AppMessage::Window>,
 }
 
 impl<AppMessage> Clone for App<AppMessage>
@@ -154,6 +158,9 @@ pub trait Application<AppMessage>: private::ApplicationSealed<AppMessage>
 where
     AppMessage: Message,
 {
+    /// Returns a handle to the running application.
+    fn app(&self) -> App<AppMessage>;
+
     /// Sends an app message to the main event loop to be handled by the
     /// callback provided when the app was created.
     ///
@@ -165,18 +172,25 @@ where
 
 /// A message with an associated response type.
 pub trait Message: Send + 'static {
+    /// The message type that is able to be sent to individual windows.
+    type Window: Send;
     /// The type returned when responding to this message.
     type Response: Send;
 }
 
 impl Message for () {
     type Response = ();
+    type Window = ();
 }
 
 impl<AppMessage> Application<AppMessage> for PendingApp<AppMessage>
 where
     AppMessage: Message,
 {
+    fn app(&self) -> App<AppMessage> {
+        self.running.clone()
+    }
+
     fn send(&mut self, message: AppMessage) -> Option<<AppMessage as Message>::Response> {
         Some((self.message_callback)(message, &self.running.windows))
     }
@@ -186,14 +200,10 @@ impl<AppMessage> private::ApplicationSealed<AppMessage> for PendingApp<AppMessag
 where
     AppMessage: Message,
 {
-    fn app(&self) -> App<AppMessage> {
-        self.running.clone()
-    }
-
     fn open(
         &self,
-        window: WindowAttributes,
-        sender: mpsc::SyncSender<WindowMessage>,
+        window: WindowAttributes<AppMessage::Window>,
+        sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
     ) -> Result<Option<Arc<winit::window::Window>>, OsError> {
         self.running
             .windows
@@ -203,33 +213,27 @@ where
 }
 
 /// A collection of open windows.
-pub struct Windows<AppMessage> {
-    data: Arc<Mutex<HashMap<WindowId, OpenWindow>>>,
-    _message: PhantomData<AppMessage>,
+pub struct Windows<Message> {
+    data: Arc<Mutex<HashMap<WindowId, OpenWindow<Message>>>>,
 }
 
-impl<AppMessage> Default for Windows<AppMessage> {
+impl<Message> Default for Windows<Message> {
     fn default() -> Self {
         Self {
             data: Arc::default(),
-            _message: PhantomData,
         }
     }
 }
 
-impl<AppMessage> Clone for Windows<AppMessage> {
+impl<Message> Clone for Windows<Message> {
     fn clone(&self) -> Self {
         Self {
             data: self.data.clone(),
-            _message: PhantomData,
         }
     }
 }
 
-impl<AppMessage> Windows<AppMessage>
-where
-    AppMessage: Message,
-{
+impl<Message> Windows<Message> {
     /// Gets an instance of the winit window for the given window id, if it is
     /// still open.
     pub fn get(&self, id: WindowId) -> Option<Arc<winit::window::Window>> {
@@ -238,12 +242,15 @@ where
     }
 
     #[allow(unsafe_code)]
-    fn open(
+    fn open<AppMessage>(
         &self,
         target: &EventLoopWindowTarget<EventLoopMessage<AppMessage>>,
-        attrs: WindowAttributes,
-        sender: mpsc::SyncSender<WindowMessage>,
-    ) -> Result<Arc<winit::window::Window>, OsError> {
+        attrs: WindowAttributes<Message>,
+        sender: mpsc::SyncSender<WindowMessage<Message>>,
+    ) -> Result<Arc<winit::window::Window>, OsError>
+    where
+        AppMessage: crate::Message<Window = Message>,
+    {
         let mut builder = winit::window::WindowBuilder::new()
             .with_active(attrs.active)
             .with_resizable(attrs.resizable)
@@ -297,7 +304,7 @@ where
         Ok(winit)
     }
 
-    fn send(&self, window: WindowId, message: WindowMessage) {
+    fn send(&self, window: WindowId, message: WindowMessage<Message>) {
         let mut data = self.data.lock().map_or_else(PoisonError::into_inner, |g| g);
         if let Some(open_window) = data.get(&window) {
             match open_window.sender.try_send(message) {
@@ -320,7 +327,7 @@ where
     }
 }
 
-struct OpenWindow {
+struct OpenWindow<User> {
     winit: Arc<winit::window::Window>,
-    sender: mpsc::SyncSender<WindowMessage>,
+    sender: mpsc::SyncSender<WindowMessage<User>>,
 }
