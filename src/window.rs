@@ -89,26 +89,52 @@ where
     }
 }
 
+/// Attributes of a desktop window.
+///
+/// This structure is equivalent to [`winit::window::WindowAttributes`] except
+/// that `parent_window` accepts a [`Window`] rather than relying on raw window
+/// handle.
 #[allow(clippy::struct_excessive_bools)]
 pub struct WindowAttributes<ParentWindowEvent> {
+    /// The inner size of the window.
     pub inner_size: Option<Size>,
+    /// The minimum inner size of the window.
     pub min_inner_size: Option<Size>,
+    /// The maximum inner size of the window.
     pub max_inner_size: Option<Size>,
-    pub position: Option<Position>,
+    /// The location of the top-left of the frame of the window.
+    pub location: Option<Position>,
+    /// If true, the window can be resized by the user.
     pub resizable: bool,
+    /// The collection of window buttons that are enabled.
     pub enabled_buttons: WindowButtons,
+    /// The title of the window.
     pub title: String,
+    /// The full screen configuration for the window.
     pub fullscreen: Option<Fullscreen>,
+    /// The maximized state of the window.
     pub maximized: bool,
+    /// The visibility state of the window.
     pub visible: bool,
+    /// If true, the window's chrome will be hidden and only areas that have
+    /// been drawn to will be opaque.
     pub transparent: bool,
+    /// Controls the visibility of the window decorations.
     pub decorations: bool,
+    /// The window's icon.
     pub window_icon: Option<Icon>,
+    /// The window's preferred theme.
     pub preferred_theme: Option<Theme>,
+    /// The increments in which the window will be allowed to resize by the user.
     pub resize_increments: Option<Size>,
+    /// If true, the contents of the window will be prevented from being
+    /// captured by other applications when supported.
     pub content_protected: bool,
+    /// The level of the window.
     pub window_level: WindowLevel,
+    /// The parent window of this window.
     pub parent_window: Option<Window<ParentWindowEvent>>,
+    /// Whether the window is active or not.
     pub active: bool,
 }
 
@@ -119,7 +145,7 @@ impl<User> Default for WindowAttributes<User> {
             inner_size: defaults.inner_size,
             min_inner_size: defaults.min_inner_size,
             max_inner_size: defaults.max_inner_size,
-            position: defaults.position,
+            location: defaults.position,
             resizable: defaults.resizable,
             enabled_buttons: defaults.enabled_buttons,
             title: defaults.title,
@@ -170,7 +196,7 @@ where
         // by always using try_send.
         let (sender, receiver) = mpsc::sync_channel(1024);
         let Some(winit) = self.owner.open(self.attributes, sender.clone())? else {
-            return Ok(None)
+            return Ok(None);
         };
         let window = Window {
             id: winit.id(),
@@ -283,16 +309,37 @@ where
         self.redraw_at(Instant::now() + duration);
     }
 
+    /// Returns the current title of the window.
+    #[must_use]
+    pub fn title(&self) -> String {
+        self.window.title()
+    }
+
+    /// Sets the window's title to `new_title`.
+    pub fn set_title(&mut self, new_title: &str) {
+        self.window.set_title(new_title);
+    }
+
     /// Returns the current size of the interior of the window, in pixels.
     #[must_use]
     pub const fn inner_size(&self) -> PhysicalSize<u32> {
         self.inner_size
     }
 
+    /// Sets the inner size of the window, in pixels.
+    pub fn set_inner_size(&self, new_size: PhysicalSize<u32>) {
+        self.window.set_inner_size(new_size);
+    }
+
     /// Returns the current location of the window, in pixels.
     #[must_use]
     pub const fn location(&self) -> PhysicalPosition<i32> {
         self.location
+    }
+
+    /// Sets the current location of the window, in pixels.
+    pub fn set_location(&self, new_location: PhysicalPosition<i32>) {
+        self.window.set_outer_position(new_location);
     }
 
     /// Returns the location of the cursor relative to the window's upper-left

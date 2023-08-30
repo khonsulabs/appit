@@ -9,7 +9,7 @@ mod window;
 pub use winit;
 
 use raw_window_handle::HasRawWindowHandle;
-pub use window::{RunningWindow, Window, WindowBehavior, WindowBuilder};
+pub use window::{RunningWindow, Window, WindowAttributes, WindowBehavior, WindowBuilder};
 
 use winit::error::OsError;
 use winit::window::WindowId;
@@ -20,7 +20,6 @@ use winit::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoop
 use winit::{event::Event, event_loop::EventLoop};
 
 use crate::private::{EventLoopMessage, WindowEvent, WindowMessage};
-use crate::window::WindowAttributes;
 
 /// An application that is not yet running.
 pub struct PendingApp<AppMessage>
@@ -275,8 +274,8 @@ impl<Message> Windows<Message> {
         if let Some(max_inner_size) = attrs.max_inner_size {
             builder = builder.with_max_inner_size(max_inner_size);
         }
-        if let Some(position) = attrs.position {
-            builder = builder.with_position(position);
+        if let Some(location) = attrs.location {
+            builder = builder.with_position(location);
         }
         if let Some(resize_increments) = attrs.resize_increments {
             builder = builder.with_resize_increments(resize_increments);
