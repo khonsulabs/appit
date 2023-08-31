@@ -102,8 +102,8 @@ pub struct WindowAttributes<ParentWindowEvent> {
     pub min_inner_size: Option<Size>,
     /// The maximum inner size of the window.
     pub max_inner_size: Option<Size>,
-    /// The location of the top-left of the frame of the window.
-    pub location: Option<Position>,
+    /// The position of the top-left of the frame of the window.
+    pub position: Option<Position>,
     /// If true, the window can be resized by the user.
     pub resizable: bool,
     /// The collection of window buttons that are enabled.
@@ -145,7 +145,7 @@ impl<User> Default for WindowAttributes<User> {
             inner_size: defaults.inner_size,
             min_inner_size: defaults.min_inner_size,
             max_inner_size: defaults.max_inner_size,
-            location: defaults.position,
+            position: defaults.position,
             resizable: defaults.resizable,
             enabled_buttons: defaults.enabled_buttons,
             title: defaults.title,
@@ -209,14 +209,14 @@ where
             occluded: winit.is_visible().unwrap_or(false),
             focused: winit.has_focus(),
             inner_size: winit.inner_size(),
-            location: winit.inner_position().unwrap_or_default(),
+            position: winit.inner_position().unwrap_or_default(),
             scale: winit.scale_factor(),
             theme: winit.theme().unwrap_or(Theme::Dark),
             window: winit,
             next_redraw_target: None,
             close: false,
             modifiers: ModifiersState::default(),
-            cursor_location: None,
+            cursor_position: None,
             mouse_buttons: HashSet::default(),
             keys: HashSet::default(),
         };
@@ -240,8 +240,8 @@ where
     responses: SyncChannel<AppMessage::Response>,
     app: App<AppMessage>,
     inner_size: PhysicalSize<u32>,
-    location: PhysicalPosition<i32>,
-    cursor_location: Option<PhysicalPosition<f64>>,
+    position: PhysicalPosition<i32>,
+    cursor_position: Option<PhysicalPosition<f64>>,
     mouse_buttons: HashSet<MouseButton>,
     keys: HashSet<VirtualKeyCode>,
     scale: f64,
@@ -331,22 +331,22 @@ where
         self.window.set_inner_size(new_size);
     }
 
-    /// Returns the current location of the window, in pixels.
+    /// Returns the current locpositionation of the window, in pixels.
     #[must_use]
-    pub const fn location(&self) -> PhysicalPosition<i32> {
-        self.location
+    pub const fn position(&self) -> PhysicalPosition<i32> {
+        self.position
     }
 
-    /// Sets the current location of the window, in pixels.
-    pub fn set_location(&self, new_location: PhysicalPosition<i32>) {
-        self.window.set_outer_position(new_location);
+    /// Sets the current position of the window, in pixels.
+    pub fn set_position(&self, new_position: PhysicalPosition<i32>) {
+        self.window.set_outer_position(new_position);
     }
 
-    /// Returns the location of the cursor relative to the window's upper-left
+    /// Returns the position of the cursor relative to the window's upper-left
     /// corner, in pixels.
     #[must_use]
-    pub const fn cursor_location(&self) -> Option<PhysicalPosition<f64>> {
-        self.cursor_location
+    pub const fn cursor_position(&self) -> Option<PhysicalPosition<f64>> {
+        self.cursor_position
     }
 
     /// Returns the current scale factor for the window.
@@ -491,8 +491,8 @@ where
                         behavior.resized(self);
                     }
                 }
-                WindowEvent::Moved(location) => {
-                    self.location = location;
+                WindowEvent::Moved(position) => {
+                    self.position = position;
                 }
                 WindowEvent::Destroyed => {
                     return false;
@@ -541,14 +541,14 @@ where
                     device_id,
                     position,
                 } => {
-                    self.cursor_location = Some(position);
+                    self.cursor_position = Some(position);
                     behavior.cursor_moved(self, device_id, position);
                 }
                 WindowEvent::CursorEntered { device_id } => {
                     behavior.cursor_entered(self, device_id);
                 }
                 WindowEvent::CursorLeft { device_id } => {
-                    self.cursor_location = None;
+                    self.cursor_position = None;
                     behavior.cursor_left(self, device_id);
                 }
                 WindowEvent::MouseWheel {

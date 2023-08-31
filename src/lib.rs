@@ -274,8 +274,8 @@ impl<Message> Windows<Message> {
         if let Some(max_inner_size) = attrs.max_inner_size {
             builder = builder.with_max_inner_size(max_inner_size);
         }
-        if let Some(location) = attrs.location {
-            builder = builder.with_position(location);
+        if let Some(position) = attrs.position {
+            builder = builder.with_position(position);
         }
         if let Some(resize_increments) = attrs.resize_increments {
             builder = builder.with_resize_increments(resize_increments);
