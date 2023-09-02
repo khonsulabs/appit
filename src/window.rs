@@ -9,9 +9,10 @@ use std::time::{Duration, Instant};
 use winit::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
 use winit::error::OsError;
 use winit::event::{
-    AxisId, DeviceId, ElementState, Ime, KeyboardInput, ModifiersState, MouseButton,
-    MouseScrollDelta, Touch, TouchPhase, VirtualKeyCode,
+    AxisId, DeviceId, ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, Touch,
+    TouchPhase,
 };
+use winit::keyboard::KeyCode;
 use winit::window::{Fullscreen, Icon, Theme, WindowButtons, WindowId, WindowLevel};
 
 use crate::private::{self, WindowEvent};
@@ -215,7 +216,7 @@ where
             window: winit,
             next_redraw_target: None,
             close: false,
-            modifiers: ModifiersState::default(),
+            modifiers: Modifiers::default(),
             cursor_position: None,
             mouse_buttons: HashSet::default(),
             keys: HashSet::default(),
@@ -243,13 +244,13 @@ where
     position: PhysicalPosition<i32>,
     cursor_position: Option<PhysicalPosition<f64>>,
     mouse_buttons: HashSet<MouseButton>,
-    keys: HashSet<VirtualKeyCode>,
+    keys: HashSet<KeyCode>,
     scale: f64,
     close: bool,
     occluded: bool,
     focused: bool,
     theme: Theme,
-    modifiers: ModifiersState,
+    modifiers: Modifiers,
 }
 
 impl<AppMessage> RunningWindow<AppMessage>
@@ -328,7 +329,9 @@ where
 
     /// Sets the inner size of the window, in pixels.
     pub fn set_inner_size(&self, new_size: PhysicalSize<u32>) {
-        self.window.set_inner_size(new_size);
+        // TODO not sure if this is reasonable
+        self.window.set_min_inner_size(Some(new_size));
+        self.window.set_max_inner_size(Some(new_size));
     }
 
     /// Returns the current locpositionation of the window, in pixels.
@@ -376,7 +379,7 @@ where
 
     /// Returns the current state of the keyboard modifier keys.
     #[must_use]
-    pub const fn modifiers(&self) -> ModifiersState {
+    pub const fn modifiers(&self) -> Modifiers {
         self.modifiers
     }
 
@@ -473,17 +476,18 @@ where
                 }
                 WindowEvent::ScaleFactorChanged {
                     scale_factor,
-                    new_inner_size,
+                    inner_size_writer: _,
                 } => {
                     // Ensure both values are updated before any behavior
                     // callbacks are invoked.
                     self.scale = scale_factor;
-                    let inner_size_changed = self.inner_size != new_inner_size;
-                    self.inner_size = new_inner_size;
-                    behavior.scale_factor_changed(self);
-                    if inner_size_changed {
-                        behavior.resized(self);
-                    }
+                    // TODO not sure how to implement now
+                    // let inner_size_changed = self.inner_size != new_inner_size;
+                    // self.inner_size = new_inner_size;
+                    // behavior.scale_factor_changed(self);
+                    // if inner_size_changed {
+                    //     behavior.resized(self);
+                    // }
                 }
                 WindowEvent::Resized(new_inner_size) => {
                     if self.inner_size != new_inner_size {
@@ -515,20 +519,18 @@ where
                 }
                 WindowEvent::KeyboardInput {
                     device_id,
-                    input,
+                    event,
                     is_synthetic,
                 } => {
-                    if let Some(keycode) = input.virtual_keycode {
-                        match input.state {
-                            ElementState::Pressed => {
-                                self.keys.insert(keycode);
-                            }
-                            ElementState::Released => {
-                                self.keys.remove(&keycode);
-                            }
+                    match event.state {
+                        ElementState::Pressed => {
+                            self.keys.insert(event.physical_key);
+                        }
+                        ElementState::Released => {
+                            self.keys.remove(&event.physical_key);
                         }
                     }
-                    behavior.keyboard_input(self, device_id, input, is_synthetic);
+                    behavior.keyboard_input(self, device_id, event, is_synthetic);
                 }
                 WindowEvent::ModifiersChanged(modifiers) => {
                     self.modifiers = modifiers;
@@ -607,6 +609,7 @@ where
                 } => {
                     behavior.touchpad_rotate(self, device_id, delta, phase);
                 }
+                WindowEvent::ActivationTokenDone { .. } => todo!(),
             },
         }
 
@@ -622,13 +625,13 @@ where
     /// Returns an iterator of the currently pressed keys.
     ///
     /// This iterator does not guarantee any specific order.
-    pub fn pressed_keys(&self) -> impl Iterator<Item = VirtualKeyCode> + '_ {
+    pub fn pressed_keys(&self) -> impl Iterator<Item = KeyCode> + '_ {
         self.keys.iter().copied()
     }
 
     /// Returns true if the given key code is currently pressed.
     #[must_use]
-    pub fn key_pressed(&self, keycode: &VirtualKeyCode) -> bool {
+    pub fn key_pressed(&self, keycode: &KeyCode) -> bool {
         self.keys.contains(keycode)
     }
 
@@ -900,7 +903,7 @@ where
         &mut self,
         window: &mut RunningWindow<AppMessage>,
         device_id: DeviceId,
-        input: KeyboardInput,
+        event: KeyEvent,
         is_synthetic: bool,
     ) {
     }

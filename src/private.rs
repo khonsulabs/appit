@@ -4,10 +4,11 @@ use std::sync::{mpsc, Arc};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::error::OsError;
 use winit::event::{
-    AxisId, DeviceId, ElementState, Ime, KeyboardInput, ModifiersState, MouseButton,
+    AxisId, DeviceId, ElementState, Ime, InnerSizeWriter, KeyEvent, Modifiers, MouseButton,
     MouseScrollDelta, Touch, TouchPhase,
 };
-use winit::window::{Theme, WindowId};
+use winit::event_loop::AsyncRequestSerial;
+use winit::window::{ActivationToken, Theme, WindowId};
 
 use crate::window::WindowAttributes;
 use crate::Message;
@@ -96,7 +97,7 @@ pub enum WindowEvent {
     /// An event from the keyboard has been received.
     KeyboardInput {
         device_id: DeviceId,
-        input: KeyboardInput,
+        event: KeyEvent,
         /// If `true`, the event was generated synthetically by winit
         /// in one of the following circumstances:
         ///
@@ -115,7 +116,7 @@ pub enum WindowEvent {
     ///
     /// - **Web:** This API is currently unimplemented on the web. This isn't by design - it's an
     ///   issue, and it should get fixed - but it's the current state of the API.
-    ModifiersChanged(ModifiersState),
+    ModifiersChanged(Modifiers),
 
     /// An event from an input method.
     ///
@@ -196,7 +197,7 @@ pub enum WindowEvent {
     /// For more information about DPI in general, see the [`dpi`](crate::dpi) module.
     ScaleFactorChanged {
         scale_factor: f64,
-        new_inner_size: PhysicalSize<u32>,
+        inner_size_writer: InnerSizeWriter,
     },
 
     /// The system window theme has changed.
@@ -231,11 +232,18 @@ pub enum WindowEvent {
         delta: f32,
         phase: TouchPhase,
     },
+    /// The activation token was delivered back and now could be used.
+    ///
+    /// Delivered in response to [`request_activation_token`].
+    ActivationTokenDone {
+        serial: AsyncRequestSerial,
+        token: ActivationToken,
+    },
 }
 
-impl<'a> From<winit::event::WindowEvent<'a>> for WindowEvent {
+impl From<winit::event::WindowEvent> for WindowEvent {
     #[allow(clippy::too_many_lines)] // it's a match statement
-    fn from(event: winit::event::WindowEvent<'a>) -> Self {
+    fn from(event: winit::event::WindowEvent) -> Self {
         match event {
             winit::event::WindowEvent::Resized(size) => Self::Resized(size),
             winit::event::WindowEvent::Moved(pos) => Self::Moved(pos),
@@ -244,15 +252,14 @@ impl<'a> From<winit::event::WindowEvent<'a>> for WindowEvent {
             winit::event::WindowEvent::DroppedFile(path) => Self::DroppedFile(path),
             winit::event::WindowEvent::HoveredFile(path) => Self::HoveredFile(path),
             winit::event::WindowEvent::HoveredFileCancelled => Self::HoveredFileCancelled,
-            winit::event::WindowEvent::ReceivedCharacter(ch) => Self::ReceivedCharacter(ch),
             winit::event::WindowEvent::Focused(focused) => Self::Focused(focused),
             winit::event::WindowEvent::KeyboardInput {
                 device_id,
-                input,
+                event,
                 is_synthetic,
             } => Self::KeyboardInput {
                 device_id,
-                input,
+                event,
                 is_synthetic,
             },
 
@@ -313,10 +320,10 @@ impl<'a> From<winit::event::WindowEvent<'a>> for WindowEvent {
             winit::event::WindowEvent::Touch(touch) => Self::Touch(touch),
             winit::event::WindowEvent::ScaleFactorChanged {
                 scale_factor,
-                new_inner_size,
+                inner_size_writer,
             } => Self::ScaleFactorChanged {
                 scale_factor,
-                new_inner_size: *new_inner_size,
+                inner_size_writer,
             },
             winit::event::WindowEvent::ThemeChanged(theme) => Self::ThemeChanged(theme),
             winit::event::WindowEvent::Occluded(occluded) => Self::Occluded(occluded),
@@ -341,6 +348,9 @@ impl<'a> From<winit::event::WindowEvent<'a>> for WindowEvent {
                 delta,
                 phase,
             },
+            winit::event::WindowEvent::ActivationTokenDone { serial, token } => {
+                Self::ActivationTokenDone { serial, token }
+            }
         }
     }
 }
