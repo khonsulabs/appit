@@ -474,20 +474,33 @@ where
                     self.occluded = occluded;
                     behavior.occlusion_changed(self);
                 }
-                WindowEvent::ScaleFactorChanged {
-                    scale_factor,
-                    inner_size_writer: _,
-                } => {
+                WindowEvent::ScaleFactorChanged { scale_factor } => {
+                    let factor_changed = scale_factor - self.scale;
+                    let new_inner_size = if factor_changed.abs() >= f64::EPSILON {
+                        // TODO use the suggested size from the writer <https://github.com/rust-windowing/winit/issues/3080>
+                        PhysicalSize {
+                            width: self.inner_size.width
+                                + lossy_f64_to_u32(
+                                    ((f64::from(self.inner_size.width)) * factor_changed).round(),
+                                ),
+                            height: self.inner_size.height
+                                + lossy_f64_to_u32(
+                                    (f64::from(self.inner_size.height) * factor_changed).round(),
+                                ),
+                        }
+                    } else {
+                        self.inner_size
+                    };
                     // Ensure both values are updated before any behavior
                     // callbacks are invoked.
                     self.scale = scale_factor;
                     // TODO not sure how to implement now
-                    // let inner_size_changed = self.inner_size != new_inner_size;
-                    // self.inner_size = new_inner_size;
-                    // behavior.scale_factor_changed(self);
-                    // if inner_size_changed {
-                    //     behavior.resized(self);
-                    // }
+                    let inner_size_changed = self.inner_size != new_inner_size;
+                    self.inner_size = new_inner_size;
+                    behavior.scale_factor_changed(self);
+                    if inner_size_changed {
+                        behavior.resized(self);
+                    }
                 }
                 WindowEvent::Resized(new_inner_size) => {
                     if self.inner_size != new_inner_size {
@@ -649,6 +662,12 @@ where
     }
 }
 
+/// Performs `f64 as u32` but avoids clippy's lints.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn lossy_f64_to_u32(value: f64) -> u32 {
+    value as u32
+}
+
 impl<AppMessage> Application<AppMessage> for RunningWindow<AppMessage>
 where
     AppMessage: Message,
@@ -771,6 +790,11 @@ where
     /// Messages can be sent to the application's main thread using
     /// [`Application::send`]. Each time a message is received by the main event
     /// loop, `app_callback` will be invoked.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
+    /// [`EventLoop::run`] for more information.
     fn run_with_event_callback(
         app_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
             + 'static,
@@ -791,6 +815,11 @@ where
     /// Messages can be sent to the application's main thread using
     /// [`Application::send`]. Each time a message is received by the main event
     /// loop, `app_callback` will be invoked.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
+    /// [`EventLoop::run`] for more information.
     fn run_with_context_and_event_callback(
         context: Self::Context,
         app_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response

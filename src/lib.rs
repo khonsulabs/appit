@@ -2,6 +2,7 @@
 #![warn(missing_docs, clippy::pedantic)]
 #![deny(unsafe_code)]
 #![allow(clippy::module_name_repetitions)]
+#![allow(clippy::missing_panics_doc)] // https://github.com/rust-lang/rust-clippy/issues/11436
 
 mod private;
 mod window;
@@ -78,9 +79,14 @@ where
         }
     }
 
-    /// Begins running the application. This function will never return.
+    /// Begins running the application.
     ///
     /// Internally this runs the [`EventLoop`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
+    /// [`EventLoop::run`] for more information.
     pub fn run(mut self) -> Result<(), EventLoopError> {
         self.event_loop.run(move |event, target, control_flow| {
             *control_flow = ControlFlow::Wait;

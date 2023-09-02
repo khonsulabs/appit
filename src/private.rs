@@ -4,8 +4,8 @@ use std::sync::{mpsc, Arc};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::error::OsError;
 use winit::event::{
-    AxisId, DeviceId, ElementState, Ime, InnerSizeWriter, KeyEvent, Modifiers, MouseButton,
-    MouseScrollDelta, Touch, TouchPhase,
+    AxisId, DeviceId, ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, Touch,
+    TouchPhase,
 };
 use winit::event_loop::AsyncRequestSerial;
 use winit::window::{ActivationToken, Theme, WindowId};
@@ -197,7 +197,6 @@ pub enum WindowEvent {
     /// For more information about DPI in general, see the [`dpi`](crate::dpi) module.
     ScaleFactorChanged {
         scale_factor: f64,
-        inner_size_writer: InnerSizeWriter,
     },
 
     /// The system window theme has changed.
@@ -320,10 +319,11 @@ impl From<winit::event::WindowEvent> for WindowEvent {
             winit::event::WindowEvent::Touch(touch) => Self::Touch(touch),
             winit::event::WindowEvent::ScaleFactorChanged {
                 scale_factor,
-                inner_size_writer,
-            } => Self::ScaleFactorChanged {
-                scale_factor,
-                inner_size_writer,
+                 .. // TODO use the suggested size from the writer <https://github.com/rust-windowing/winit/issues/3080>
+            } => {
+                Self::ScaleFactorChanged {
+                    scale_factor,
+                }
             },
             winit::event::WindowEvent::ThemeChanged(theme) => Self::ThemeChanged(theme),
             winit::event::WindowEvent::Occluded(occluded) => Self::Occluded(occluded),
