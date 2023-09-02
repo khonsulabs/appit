@@ -7,11 +7,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use winit::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
-use winit::error::OsError;
+use winit::error::{EventLoopError, OsError};
 use winit::event::{
-    AxisId, DeviceId, ElementState, Ime, KeyboardInput, ModifiersState, MouseButton,
-    MouseScrollDelta, Touch, TouchPhase, VirtualKeyCode,
+    AxisId, DeviceId, ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, Touch,
+    TouchPhase,
 };
+use winit::keyboard::KeyCode;
 use winit::window::{Fullscreen, Icon, Theme, WindowButtons, WindowId, WindowLevel};
 
 use crate::private::{self, WindowEvent};
@@ -215,7 +216,7 @@ where
             window: winit,
             next_redraw_target: None,
             close: false,
-            modifiers: ModifiersState::default(),
+            modifiers: Modifiers::default(),
             cursor_position: None,
             mouse_buttons: HashSet::default(),
             keys: HashSet::default(),
@@ -243,13 +244,13 @@ where
     position: PhysicalPosition<i32>,
     cursor_position: Option<PhysicalPosition<f64>>,
     mouse_buttons: HashSet<MouseButton>,
-    keys: HashSet<VirtualKeyCode>,
+    keys: HashSet<KeyCode>,
     scale: f64,
     close: bool,
     occluded: bool,
     focused: bool,
     theme: Theme,
-    modifiers: ModifiersState,
+    modifiers: Modifiers,
 }
 
 impl<AppMessage> RunningWindow<AppMessage>
@@ -328,7 +329,9 @@ where
 
     /// Sets the inner size of the window, in pixels.
     pub fn set_inner_size(&self, new_size: PhysicalSize<u32>) {
-        self.window.set_inner_size(new_size);
+        // TODO not sure if this is reasonable
+        self.window.set_min_inner_size(Some(new_size));
+        self.window.set_max_inner_size(Some(new_size));
     }
 
     /// Returns the current locpositionation of the window, in pixels.
@@ -376,7 +379,7 @@ where
 
     /// Returns the current state of the keyboard modifier keys.
     #[must_use]
-    pub const fn modifiers(&self) -> ModifiersState {
+    pub const fn modifiers(&self) -> Modifiers {
         self.modifiers
     }
 
@@ -471,13 +474,27 @@ where
                     self.occluded = occluded;
                     behavior.occlusion_changed(self);
                 }
-                WindowEvent::ScaleFactorChanged {
-                    scale_factor,
-                    new_inner_size,
-                } => {
+                WindowEvent::ScaleFactorChanged { scale_factor } => {
+                    let factor_changed = scale_factor - self.scale;
+                    let new_inner_size = if factor_changed.abs() >= f64::EPSILON {
+                        // TODO use the suggested size from the writer <https://github.com/rust-windowing/winit/issues/3080>
+                        PhysicalSize {
+                            width: self.inner_size.width
+                                + lossy_f64_to_u32(
+                                    ((f64::from(self.inner_size.width)) * factor_changed).round(),
+                                ),
+                            height: self.inner_size.height
+                                + lossy_f64_to_u32(
+                                    (f64::from(self.inner_size.height) * factor_changed).round(),
+                                ),
+                        }
+                    } else {
+                        self.inner_size
+                    };
                     // Ensure both values are updated before any behavior
                     // callbacks are invoked.
                     self.scale = scale_factor;
+                    // TODO not sure how to implement now
                     let inner_size_changed = self.inner_size != new_inner_size;
                     self.inner_size = new_inner_size;
                     behavior.scale_factor_changed(self);
@@ -515,20 +532,18 @@ where
                 }
                 WindowEvent::KeyboardInput {
                     device_id,
-                    input,
+                    event,
                     is_synthetic,
                 } => {
-                    if let Some(keycode) = input.virtual_keycode {
-                        match input.state {
-                            ElementState::Pressed => {
-                                self.keys.insert(keycode);
-                            }
-                            ElementState::Released => {
-                                self.keys.remove(&keycode);
-                            }
+                    match event.state {
+                        ElementState::Pressed => {
+                            self.keys.insert(event.physical_key);
+                        }
+                        ElementState::Released => {
+                            self.keys.remove(&event.physical_key);
                         }
                     }
-                    behavior.keyboard_input(self, device_id, input, is_synthetic);
+                    behavior.keyboard_input(self, device_id, event, is_synthetic);
                 }
                 WindowEvent::ModifiersChanged(modifiers) => {
                     self.modifiers = modifiers;
@@ -607,6 +622,7 @@ where
                 } => {
                     behavior.touchpad_rotate(self, device_id, delta, phase);
                 }
+                WindowEvent::ActivationTokenDone { .. } => todo!(),
             },
         }
 
@@ -622,13 +638,13 @@ where
     /// Returns an iterator of the currently pressed keys.
     ///
     /// This iterator does not guarantee any specific order.
-    pub fn pressed_keys(&self) -> impl Iterator<Item = VirtualKeyCode> + '_ {
+    pub fn pressed_keys(&self) -> impl Iterator<Item = KeyCode> + '_ {
         self.keys.iter().copied()
     }
 
     /// Returns true if the given key code is currently pressed.
     #[must_use]
-    pub fn key_pressed(&self, keycode: &VirtualKeyCode) -> bool {
+    pub fn key_pressed(&self, keycode: &KeyCode) -> bool {
         self.keys.contains(keycode)
     }
 
@@ -644,6 +660,12 @@ where
     pub fn mouse_button_pressed(&self, button: &MouseButton) -> bool {
         self.mouse_buttons.contains(button)
     }
+}
+
+/// Performs `f64 as u32` but avoids clippy's lints.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn lossy_f64_to_u32(value: f64) -> u32 {
+    value as u32
 }
 
 impl<AppMessage> Application<AppMessage> for RunningWindow<AppMessage>
@@ -768,10 +790,15 @@ where
     /// Messages can be sent to the application's main thread using
     /// [`Application::send`]. Each time a message is received by the main event
     /// loop, `app_callback` will be invoked.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
+    /// [`EventLoop::run`] for more information.
     fn run_with_event_callback(
         app_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
             + 'static,
-    ) -> !
+    ) -> Result<(), EventLoopError>
     where
         Self::Context: Default,
     {
@@ -788,11 +815,16 @@ where
     /// Messages can be sent to the application's main thread using
     /// [`Application::send`]. Each time a message is received by the main event
     /// loop, `app_callback` will be invoked.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
+    /// [`EventLoop::run`] for more information.
     fn run_with_context_and_event_callback(
         context: Self::Context,
         app_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
             + 'static,
-    ) -> ! {
+    ) -> Result<(), EventLoopError> {
         let app = PendingApp::new_with_event_callback(app_callback);
         Self::open_with(&app, context).expect("error opening initial window");
         app.run()
@@ -900,7 +932,7 @@ where
         &mut self,
         window: &mut RunningWindow<AppMessage>,
         device_id: DeviceId,
-        input: KeyboardInput,
+        event: KeyEvent,
         is_synthetic: bool,
     ) {
     }
@@ -1017,7 +1049,7 @@ pub trait Run: WindowBehavior<()> {
     ///
     /// This function is shorthand for creating a [`PendingApp`], opening this
     /// window inside of it, and running the pending app.
-    fn run() -> !
+    fn run() -> Result<(), EventLoopError>
     where
         Self::Context: Default,
     {
@@ -1030,7 +1062,7 @@ pub trait Run: WindowBehavior<()> {
     ///
     /// This function is shorthand for creating a [`PendingApp`], opening this
     /// window inside of it, and running the pending app.
-    fn run_with(context: Self::Context) -> ! {
+    fn run_with(context: Self::Context) -> Result<(), EventLoopError> {
         let app = PendingApp::new();
         Self::open_with(&app, context).expect("error opening initial window");
         app.run()

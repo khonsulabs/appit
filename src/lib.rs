@@ -2,6 +2,7 @@
 #![warn(missing_docs, clippy::pedantic)]
 #![deny(unsafe_code)]
 #![allow(clippy::module_name_repetitions)]
+#![allow(clippy::missing_panics_doc)] // https://github.com/rust-lang/rust-clippy/issues/11436
 
 mod private;
 mod window;
@@ -11,7 +12,7 @@ pub use winit;
 use raw_window_handle::HasRawWindowHandle;
 pub use window::{RunningWindow, Window, WindowAttributes, WindowBehavior, WindowBuilder};
 
-use winit::error::OsError;
+use winit::error::{EventLoopError, OsError};
 use winit::window::WindowId;
 
 use std::collections::HashMap;
@@ -64,7 +65,9 @@ where
         event_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
             + 'static,
     ) -> Self {
-        let event_loop = EventLoopBuilder::with_user_event().build();
+        let event_loop = EventLoopBuilder::with_user_event()
+            .build()
+            .expect("should be able to create an EventLoop");
         let proxy = event_loop.create_proxy();
         Self {
             event_loop,
@@ -76,10 +79,15 @@ where
         }
     }
 
-    /// Begins running the application. This function will never return.
+    /// Begins running the application.
     ///
     /// Internally this runs the [`EventLoop`].
-    pub fn run(mut self) -> ! {
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
+    /// [`EventLoop::run`] for more information.
+    pub fn run(mut self) -> Result<(), EventLoopError> {
         self.event_loop.run(move |event, target, control_flow| {
             *control_flow = ControlFlow::Wait;
             match event {
@@ -123,11 +131,10 @@ where
                 | Event::DeviceEvent { .. }
                 | Event::Suspended
                 | Event::Resumed
-                | Event::MainEventsCleared
-                | Event::RedrawEventsCleared
-                | Event::LoopDestroyed => {}
+                | Event::LoopExiting
+                | Event::AboutToWait => {}
             }
-        });
+        })
     }
 }
 

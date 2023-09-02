@@ -5,5 +5,5 @@ edition = "2021"
 
 
 [dependencies]
-winit = "0.28.6"
+winit = "0.29.1-beta"
 raw-window-handle = "0.5.1"
