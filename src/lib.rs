@@ -11,11 +11,10 @@ pub use winit;
 use raw_window_handle::HasRawWindowHandle;
 pub use window::{RunningWindow, Window, WindowAttributes, WindowBehavior, WindowBuilder};
 
-use winit::error::OsError;
+use winit::error::{EventLoopError, OsError};
 use winit::window::WindowId;
 
 use std::collections::HashMap;
-use std::process::exit;
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use winit::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
 use winit::{event::Event, event_loop::EventLoop};
@@ -82,58 +81,54 @@ where
     /// Begins running the application. This function will never return.
     ///
     /// Internally this runs the [`EventLoop`].
-    pub fn run(mut self) -> ! {
-        self.event_loop
-            .run(move |event, target, control_flow| {
-                *control_flow = ControlFlow::Wait;
-                match event {
-                    Event::WindowEvent { window_id, event } => {
-                        let event = WindowEvent::from(event);
-                        self.running
-                            .windows
-                            .send(window_id, WindowMessage::Event(event));
-                    }
-                    Event::RedrawRequested(window_id) => {
-                        self.running.windows.send(window_id, WindowMessage::Redraw);
-                    }
-                    Event::UserEvent(message) => match message {
-                        EventLoopMessage::CloseWindow(window_id) => {
-                            if self.running.windows.close(window_id) {
-                                *control_flow = ControlFlow::ExitWithCode(0);
-                            }
-                        }
-                        EventLoopMessage::WindowPanic(window_id) => {
-                            if self.running.windows.close(window_id) {
-                                *control_flow = ControlFlow::ExitWithCode(1);
-                            }
-                        }
-                        EventLoopMessage::OpenWindow {
-                            attrs,
-                            sender,
-                            open_sender,
-                        } => {
-                            let result = self.running.windows.open(target, attrs, sender);
-                            let _result = open_sender.send(result);
-                        }
-                        EventLoopMessage::User {
-                            message,
-                            response_sender,
-                        } => {
-                            let _result = response_sender
-                                .send((self.message_callback)(message, &self.running.windows));
-                        }
-                    },
-                    Event::NewEvents(_)
-                    | Event::DeviceEvent { .. }
-                    | Event::Suspended
-                    | Event::Resumed
-                    | Event::LoopExiting
-                    | Event::AboutToWait => {}
+    pub fn run(mut self) -> Result<(), EventLoopError> {
+        self.event_loop.run(move |event, target, control_flow| {
+            *control_flow = ControlFlow::Wait;
+            match event {
+                Event::WindowEvent { window_id, event } => {
+                    let event = WindowEvent::from(event);
+                    self.running
+                        .windows
+                        .send(window_id, WindowMessage::Event(event));
                 }
-            })
-            .unwrap();
-        // TODO do we want to forward the change to a result
-        exit(0);
+                Event::RedrawRequested(window_id) => {
+                    self.running.windows.send(window_id, WindowMessage::Redraw);
+                }
+                Event::UserEvent(message) => match message {
+                    EventLoopMessage::CloseWindow(window_id) => {
+                        if self.running.windows.close(window_id) {
+                            *control_flow = ControlFlow::ExitWithCode(0);
+                        }
+                    }
+                    EventLoopMessage::WindowPanic(window_id) => {
+                        if self.running.windows.close(window_id) {
+                            *control_flow = ControlFlow::ExitWithCode(1);
+                        }
+                    }
+                    EventLoopMessage::OpenWindow {
+                        attrs,
+                        sender,
+                        open_sender,
+                    } => {
+                        let result = self.running.windows.open(target, attrs, sender);
+                        let _result = open_sender.send(result);
+                    }
+                    EventLoopMessage::User {
+                        message,
+                        response_sender,
+                    } => {
+                        let _result = response_sender
+                            .send((self.message_callback)(message, &self.running.windows));
+                    }
+                },
+                Event::NewEvents(_)
+                | Event::DeviceEvent { .. }
+                | Event::Suspended
+                | Event::Resumed
+                | Event::LoopExiting
+                | Event::AboutToWait => {}
+            }
+        })
     }
 }
 

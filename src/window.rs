@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use winit::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
-use winit::error::OsError;
+use winit::error::{EventLoopError, OsError};
 use winit::event::{
     AxisId, DeviceId, ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, Touch,
     TouchPhase,
@@ -774,7 +774,7 @@ where
     fn run_with_event_callback(
         app_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
             + 'static,
-    ) -> !
+    ) -> Result<(), EventLoopError>
     where
         Self::Context: Default,
     {
@@ -795,7 +795,7 @@ where
         context: Self::Context,
         app_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
             + 'static,
-    ) -> ! {
+    ) -> Result<(), EventLoopError> {
         let app = PendingApp::new_with_event_callback(app_callback);
         Self::open_with(&app, context).expect("error opening initial window");
         app.run()
@@ -1020,7 +1020,7 @@ pub trait Run: WindowBehavior<()> {
     ///
     /// This function is shorthand for creating a [`PendingApp`], opening this
     /// window inside of it, and running the pending app.
-    fn run() -> !
+    fn run() -> Result<(), EventLoopError>
     where
         Self::Context: Default,
     {
@@ -1033,7 +1033,7 @@ pub trait Run: WindowBehavior<()> {
     ///
     /// This function is shorthand for creating a [`PendingApp`], opening this
     /// window inside of it, and running the pending app.
-    fn run_with(context: Self::Context) -> ! {
+    fn run_with(context: Self::Context) -> Result<(), EventLoopError> {
         let app = PendingApp::new();
         Self::open_with(&app, context).expect("error opening initial window");
         app.run()
