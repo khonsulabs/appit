@@ -475,26 +475,10 @@ where
                     behavior.occlusion_changed(self);
                 }
                 WindowEvent::ScaleFactorChanged { scale_factor } => {
-                    let factor_changed = scale_factor - self.scale;
-                    let new_inner_size = if factor_changed.abs() >= f64::EPSILON {
-                        // TODO use the suggested size from the writer <https://github.com/rust-windowing/winit/issues/3080>
-                        PhysicalSize {
-                            width: self.inner_size.width
-                                + lossy_f64_to_u32(
-                                    ((f64::from(self.inner_size.width)) * factor_changed).round(),
-                                ),
-                            height: self.inner_size.height
-                                + lossy_f64_to_u32(
-                                    (f64::from(self.inner_size.height) * factor_changed).round(),
-                                ),
-                        }
-                    } else {
-                        self.inner_size
-                    };
                     // Ensure both values are updated before any behavior
                     // callbacks are invoked.
                     self.scale = scale_factor;
-                    // TODO not sure how to implement now
+                    let new_inner_size = self.window.inner_size();
                     let inner_size_changed = self.inner_size != new_inner_size;
                     self.inner_size = new_inner_size;
                     behavior.scale_factor_changed(self);
@@ -660,12 +644,6 @@ where
     pub fn mouse_button_pressed(&self, button: &MouseButton) -> bool {
         self.mouse_buttons.contains(button)
     }
-}
-
-/// Performs `f64 as u32` but avoids clippy's lints.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn lossy_f64_to_u32(value: f64) -> u32 {
-    value as u32
 }
 
 impl<AppMessage> Application<AppMessage> for RunningWindow<AppMessage>
