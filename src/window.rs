@@ -195,7 +195,7 @@ where
         // avoid a "frozen" window causing massive memory allocations, we'll use
         // a fixed-size channel and be cautious to not block the main event loop
         // by always using try_send.
-        let (sender, receiver) = mpsc::sync_channel(1024);
+        let (sender, receiver) = mpsc::sync_channel(65536);
         let Some(winit) = self.owner.open(self.attributes, sender.clone())? else {
             return Ok(None);
         };
@@ -317,8 +317,18 @@ where
     }
 
     /// Sets the window's title to `new_title`.
-    pub fn set_title(&mut self, new_title: &str) {
+    pub fn set_title(&self, new_title: &str) {
         self.window.set_title(new_title);
+    }
+
+    /// Sets the window's minimum inner size.
+    pub fn set_min_inner_size(&self, min_size: Option<PhysicalSize<u32>>) {
+        self.window.set_min_inner_size(min_size);
+    }
+
+    /// Sets the window's maximum inner size.
+    pub fn set_max_inner_size(&self, max_size: Option<PhysicalSize<u32>>) {
+        self.window.set_max_inner_size(max_size);
     }
 
     /// Returns the current size of the interior of the window, in pixels.
