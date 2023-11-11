@@ -137,6 +137,13 @@ pub struct WindowAttributes<ParentWindowEvent> {
     pub parent_window: Option<Window<ParentWindowEvent>>,
     /// Whether the window is active or not.
     pub active: bool,
+    /// Name of the application
+    ///
+    /// - `WM_CLASS` on X11
+    /// - application ID on wayland
+    /// - class name on windows
+    #[doc(alias("app_id", "class", "class_name"))]
+    pub app_name: Option<String>,
 }
 
 impl<User> Default for WindowAttributes<User> {
@@ -162,6 +169,7 @@ impl<User> Default for WindowAttributes<User> {
             window_level: defaults.window_level,
             active: defaults.active,
             parent_window: None,
+            app_name: None,
         }
     }
 }

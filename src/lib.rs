@@ -272,6 +272,23 @@ impl<Message> Windows<Message> {
             .with_window_icon(attrs.window_icon)
             .with_theme(attrs.preferred_theme);
 
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        if let Some(app_name) = &attrs.app_name {
+            #[cfg(target_os = "linux")]
+            {
+                builder = winit::platform::wayland::WindowBuilderExtWayland::with_name(
+                    builder, app_name, "",
+                );
+                builder =
+                    winit::platform::x11::WindowBuilderExtX11::with_name(builder, app_name, "");
+            }
+            #[cfg(target_os = "windows")]
+            {
+                builder =
+                    platform::windows::WindowBuilderExtWindows::with_name(builder, app_name, "");
+            }
+        }
+
         if let Some(inner_size) = attrs.inner_size {
             builder = builder.with_inner_size(inner_size);
         }
