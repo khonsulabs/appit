@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 
+[features]
+default = ["x11", "wayland", "wayland-dlopen"]
+wayland-csd-adwaita = ["winit/wayland-csd-adwaita"]
+x11 = ["winit/x11"]
+wayland = ["winit/wayland"]
+wayland-dlopen = ["winit/wayland-dlopen"]
+
 [dependencies]
-winit = "=0.29.1-beta"
+winit = { version = "=0.29.1-beta", default-features = false }
 raw-window-handle = "0.5.1"
