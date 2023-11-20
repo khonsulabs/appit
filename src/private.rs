@@ -19,7 +19,7 @@ where
 {
     fn open(
         &self,
-        window: WindowAttributes<AppMessage::Window>,
+        window: WindowAttributes,
         sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
     ) -> Result<Option<Arc<winit::window::Window>>, OsError>;
 }
@@ -29,7 +29,7 @@ where
     AppMessage: Message,
 {
     OpenWindow {
-        attrs: WindowAttributes<AppMessage::Window>,
+        attrs: WindowAttributes,
         sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
         open_sender: mpsc::SyncSender<Result<Arc<winit::window::Window>, OsError>>,
     },
@@ -43,13 +43,14 @@ where
 
 #[derive(Debug)]
 pub enum WindowMessage<User> {
-    Redraw,
     User(User),
     Event(WindowEvent),
 }
 
 #[derive(Debug)]
 pub enum WindowEvent {
+    RedrawRequested,
+
     /// The size of the window has changed. Contains the client area's new dimensions.
     Resized(PhysicalSize<u32>),
 
@@ -244,6 +245,7 @@ impl From<winit::event::WindowEvent> for WindowEvent {
     #[allow(clippy::too_many_lines)] // it's a match statement
     fn from(event: winit::event::WindowEvent) -> Self {
         match event {
+            winit::event::WindowEvent::RedrawRequested => Self::RedrawRequested,
             winit::event::WindowEvent::Resized(size) => Self::Resized(size),
             winit::event::WindowEvent::Moved(pos) => Self::Moved(pos),
             winit::event::WindowEvent::CloseRequested => Self::CloseRequested,

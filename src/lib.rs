@@ -7,18 +7,18 @@
 mod private;
 mod window;
 
-pub use winit;
-
-use raw_window_handle::HasRawWindowHandle;
-pub use window::{RunningWindow, Window, WindowAttributes, WindowBehavior, WindowBuilder};
-
-use winit::error::{EventLoopError, OsError};
-use winit::window::WindowId;
-
 use std::collections::HashMap;
+use std::process::exit;
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
-use winit::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
-use winit::{event::Event, event_loop::EventLoop};
+
+pub use window::{RunningWindow, Window, WindowAttributes, WindowBehavior, WindowBuilder};
+pub use winit;
+use winit::error::{EventLoopError, OsError};
+use winit::event::Event;
+use winit::event_loop::{
+    ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget,
+};
+use winit::window::WindowId;
 
 use crate::private::{EventLoopMessage, WindowEvent, WindowMessage};
 
@@ -50,7 +50,7 @@ impl PendingApp<()> {
     /// app is run, the app will immediately close.
     #[must_use]
     pub fn new() -> Self {
-        Self::new_with_event_callback(|_, _| {})
+        Self::new_with_event_callback(|(), _| {})
     }
 }
 
@@ -88,8 +88,8 @@ where
     /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
     /// [`EventLoop::run`] for more information.
     pub fn run(mut self) -> Result<(), EventLoopError> {
-        self.event_loop.run(move |event, target, control_flow| {
-            *control_flow = ControlFlow::Wait;
+        self.event_loop.run(move |event, target| {
+            target.set_control_flow(ControlFlow::Wait);
             match event {
                 Event::WindowEvent { window_id, event } => {
                     let event = WindowEvent::from(event);
@@ -97,18 +97,15 @@ where
                         .windows
                         .send(window_id, WindowMessage::Event(event));
                 }
-                Event::RedrawRequested(window_id) => {
-                    self.running.windows.send(window_id, WindowMessage::Redraw);
-                }
                 Event::UserEvent(message) => match message {
                     EventLoopMessage::CloseWindow(window_id) => {
                         if self.running.windows.close(window_id) {
-                            *control_flow = ControlFlow::ExitWithCode(0);
+                            exit(0)
                         }
                     }
                     EventLoopMessage::WindowPanic(window_id) => {
                         if self.running.windows.close(window_id) {
-                            *control_flow = ControlFlow::ExitWithCode(1);
+                            exit(1)
                         }
                     }
                     EventLoopMessage::OpenWindow {
@@ -128,6 +125,7 @@ where
                     }
                 },
                 Event::NewEvents(_)
+                | Event::MemoryWarning
                 | Event::DeviceEvent { .. }
                 | Event::Suspended
                 | Event::Resumed
@@ -208,7 +206,7 @@ where
 {
     fn open(
         &self,
-        window: WindowAttributes<AppMessage::Window>,
+        window: WindowAttributes,
         sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
     ) -> Result<Option<Arc<winit::window::Window>>, OsError> {
         self.running
@@ -251,7 +249,7 @@ impl<Message> Windows<Message> {
     fn open<AppMessage>(
         &self,
         target: &EventLoopWindowTarget<EventLoopMessage<AppMessage>>,
-        attrs: WindowAttributes<Message>,
+        attrs: WindowAttributes,
         sender: mpsc::SyncSender<WindowMessage<Message>>,
     ) -> Result<Arc<winit::window::Window>, OsError>
     where
@@ -304,19 +302,8 @@ impl<Message> Windows<Message> {
         if let Some(resize_increments) = attrs.resize_increments {
             builder = builder.with_resize_increments(resize_increments);
         }
-        let mut windows = self.data.lock().map_or_else(PoisonError::into_inner, |g| g);
-        if let Some(parent_window) = attrs.parent_window {
-            let parent_window = windows
-                .get(&parent_window.id())
-                .expect("invalid parent window");
-            // SAFETY: The only way for us to resolve to a winit Window is for
-            // the window to still be in our list of open windows. This
-            // guarantees that the window handle is still valid.
-            unsafe {
-                builder = builder.with_parent_window(Some(parent_window.winit.raw_window_handle()));
-            }
-        }
         let winit = Arc::new(builder.build(target)?);
+        let mut windows = self.data.lock().map_or_else(PoisonError::into_inner, |g| g);
         windows.insert(
             winit.id(),
             OpenWindow {

@@ -12,7 +12,7 @@ use winit::event::{
     AxisId, DeviceId, ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, Touch,
     TouchPhase,
 };
-use winit::keyboard::KeyCode;
+use winit::keyboard::PhysicalKey;
 use winit::window::{Fullscreen, Icon, Theme, WindowButtons, WindowId, WindowLevel};
 
 use crate::private::{self, WindowEvent};
@@ -64,7 +64,7 @@ where
 {
     owner: &'a Application,
     context: Behavior::Context,
-    attributes: WindowAttributes<AppMessage::Window>,
+    attributes: WindowAttributes,
 }
 impl<'a, Behavior, Application, AppMessage> Deref
     for WindowBuilder<'a, Behavior, Application, AppMessage>
@@ -72,7 +72,7 @@ where
     Behavior: self::WindowBehavior<AppMessage>,
     AppMessage: Message,
 {
-    type Target = WindowAttributes<AppMessage::Window>;
+    type Target = WindowAttributes;
 
     fn deref(&self) -> &Self::Target {
         &self.attributes
@@ -96,7 +96,7 @@ where
 /// that `parent_window` accepts a [`Window`] rather than relying on raw window
 /// handle.
 #[allow(clippy::struct_excessive_bools)]
-pub struct WindowAttributes<ParentWindowEvent> {
+pub struct WindowAttributes {
     /// The inner size of the window.
     pub inner_size: Option<Size>,
     /// The minimum inner size of the window.
@@ -133,8 +133,6 @@ pub struct WindowAttributes<ParentWindowEvent> {
     pub content_protected: bool,
     /// The level of the window.
     pub window_level: WindowLevel,
-    /// The parent window of this window.
-    pub parent_window: Option<Window<ParentWindowEvent>>,
     /// Whether the window is active or not.
     pub active: bool,
     /// Name of the application
@@ -146,9 +144,10 @@ pub struct WindowAttributes<ParentWindowEvent> {
     pub app_name: Option<String>,
 }
 
-impl<User> Default for WindowAttributes<User> {
+impl Default for WindowAttributes {
     fn default() -> Self {
         let defaults = winit::window::WindowAttributes::default();
+        let fullscreen = defaults.fullscreen().cloned();
         Self {
             inner_size: defaults.inner_size,
             min_inner_size: defaults.min_inner_size,
@@ -157,7 +156,7 @@ impl<User> Default for WindowAttributes<User> {
             resizable: defaults.resizable,
             enabled_buttons: defaults.enabled_buttons,
             title: defaults.title,
-            fullscreen: defaults.fullscreen,
+            fullscreen,
             maximized: defaults.maximized,
             visible: defaults.visible,
             transparent: defaults.transparent,
@@ -168,7 +167,6 @@ impl<User> Default for WindowAttributes<User> {
             content_protected: defaults.content_protected,
             window_level: defaults.window_level,
             active: defaults.active,
-            parent_window: None,
             app_name: None,
         }
     }
@@ -252,7 +250,7 @@ where
     position: PhysicalPosition<i32>,
     cursor_position: Option<PhysicalPosition<f64>>,
     mouse_buttons: HashSet<MouseButton>,
-    keys: HashSet<KeyCode>,
+    keys: HashSet<PhysicalKey>,
     scale: f64,
     close: bool,
     occluded: bool,
@@ -474,11 +472,11 @@ where
         Behavior: self::WindowBehavior<AppMessage>,
     {
         match message {
-            WindowMessage::Redraw => {
-                self.set_needs_redraw();
-            }
             WindowMessage::User(user) => behavior.event(self, user),
             WindowMessage::Event(evt) => match evt {
+                WindowEvent::RedrawRequested => {
+                    self.set_needs_redraw();
+                }
                 WindowEvent::CloseRequested => {
                     if behavior.close_requested(self) {
                         self.close();
@@ -640,14 +638,14 @@ where
     /// Returns an iterator of the currently pressed keys.
     ///
     /// This iterator does not guarantee any specific order.
-    pub fn pressed_keys(&self) -> impl Iterator<Item = KeyCode> + '_ {
+    pub fn pressed_keys(&self) -> impl Iterator<Item = PhysicalKey> + '_ {
         self.keys.iter().copied()
     }
 
     /// Returns true if the given key code is currently pressed.
     #[must_use]
-    pub fn key_pressed(&self, keycode: &KeyCode) -> bool {
-        self.keys.contains(keycode)
+    pub fn key_pressed(&self, key: &PhysicalKey) -> bool {
+        self.keys.contains(key)
     }
 
     /// Returns an iterator of the currently pressed mouse buttons.
@@ -690,7 +688,7 @@ where
 {
     fn open(
         &self,
-        attrs: WindowAttributes<AppMessage::Window>,
+        attrs: WindowAttributes,
         sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
     ) -> Result<Option<Arc<winit::window::Window>>, OsError> {
         let (open_sender, open_receiver) = mpsc::sync_channel(1);
