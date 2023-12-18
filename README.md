@@ -1,5 +1,9 @@
 # appit
 
+![appit is considered alpha and unsupported](https://img.shields.io/badge/status-alpha-orange)
+[![crate version](https://img.shields.io/crates/v/appit.svg)](https://crates.io/crates/appit)
+[![Documentation for `main` branch](https://img.shields.io/badge/docs-main-informational)](https://khonsulabs.github.io/appit/main/appit)
+
 An opinionated wrapper for `winit` that provides a trait-based approach to
 implementing multi-window applications.
 
@@ -33,8 +37,20 @@ fn main() {
 }
 ```
 
-## Why not use this crate?
+## Project Status
 
-- Very new, largely untested.
-- Not all platforms support threads, and a single-window, single-thread code
-  path is not supported yet.
+This project is early in development as part of [Kludgine][kludgine] and
+[Gooey][gooey]. It is considered alpha and unsupported at this time, and the
+primary focus for [@ecton][ecton] is to use this for his own projects. Feature
+requests and bug fixes will be prioritized based on @ecton's own needs.
+
+If you would like to contribute, bug fixes are always appreciated. Before
+working on a new feature, please [open an issue][issues] proposing the feature
+and problem it aims to solve. Doing so will help prevent friction in merging
+pull requests, as it ensures changes fit the vision the maintainers have for
+Gooey.
+
+[gooey]: https://github.com/khonsulabs/gooey
+[kludgine]: https://github.com/khonsulabs/kludgine
+[ecton]: https://github.com/khonsulabs/ecton
+[issues]: https://github.com/khonsulabs/gooey/issues

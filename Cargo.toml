@@ -2,7 +2,12 @@
 name = "appit"
 version = "0.1.0"
 edition = "2021"
-
+description = "A math library specialized for 2d screen graphics."
+repository = "https://github.com/khonsulabs/appit"
+license = "MIT OR Apache-2.0"
+keywords = ["windowing", "winit"]
+categories = ["gui"]
+readme = "./README.md"
 
 [features]
 default = ["x11", "wayland", "wayland-dlopen"]
