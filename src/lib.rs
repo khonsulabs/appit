@@ -283,7 +283,7 @@ impl<Message> Windows<Message> {
             #[cfg(target_os = "windows")]
             {
                 builder =
-                    platform::windows::WindowBuilderExtWindows::with_name(builder, app_name, "");
+                    winit::platform::windows::WindowBuilderExtWindows::with_class_name(builder, app_name);
             }
         }
 
