@@ -409,7 +409,12 @@ where
             let mut behavior = Behavior::initialize(&mut self, context);
             while !self.close && self.process_messages_until_redraw(&mut behavior) {
                 self.next_redraw_target = None;
-                behavior.redraw(&mut self);
+                #[allow(unsafe_code)]
+                unsafe {
+                    // SAFETY: `behaviour` is dropped after this block, and `self`
+                    //         outlives it.
+                    behavior.redraw(&mut self);
+                }
             }
             // Do not notify the main thread to close the window until after the
             // behavior is dropped. This upholds the requirement for RawWindowHandle
@@ -867,7 +872,10 @@ where
     fn initialize(window: &mut RunningWindow<AppMessage>, context: Self::Context) -> Self;
 
     /// Displays the contents of the window.
-    fn redraw(&mut self, window: &mut RunningWindow<AppMessage>);
+    /// 
+    /// SAFETY: The caller ensures that `window` outlives this `WindowBehaviour`
+    #[allow(unsafe_code)]
+    unsafe fn redraw(&mut self, window: &mut RunningWindow<AppMessage>);
 
     /// The window has been requested to be closed. This can happen as a result
     /// of the user clicking the close button.
