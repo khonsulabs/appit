@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
-use std::panic::{AssertUnwindSafe, UnwindSafe};
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 use std::thread;
@@ -405,6 +405,12 @@ where
     {
         let proxy = self.app.proxy.clone();
         let window_id = self.window.id();
+        // We assert unwind safety here due to internal types on some platforms
+        // in winit use dyn trait objects that do not specify unwind safety.
+        // However, in this situation we are not recovering the window itself.
+        // The panic will cause us to ask winit to close the window. There is no
+        // recovery for a panic inside of a window, the only question is whether
+        // the entire app panics or not.
         let possible_panic = std::panic::catch_unwind(AssertUnwindSafe(move || {
             let mut behavior = Behavior::initialize(&mut self, context);
             while !self.close && self.process_messages_until_redraw(&mut behavior) {
@@ -417,7 +423,6 @@ where
             // chance to be freed.
         }));
 
-        //
         if let Err(panic) = possible_panic {
             let _result = proxy.send_event(EventLoopMessage::WindowPanic(window_id));
             std::panic::resume_unwind(panic)
@@ -743,7 +748,7 @@ enum TimeUntilRedraw {
 /// consumers of the libraries. This trait provides functions for each of the
 /// events a window may receive, enabling the type to react and update its
 /// state.
-pub trait WindowBehavior<AppMessage>: UnwindSafe + Sized + 'static
+pub trait WindowBehavior<AppMessage>: Sized + 'static
 where
     AppMessage: Message,
 {
@@ -751,8 +756,7 @@ where
     ///
     /// This allows providing data to the window from the thread that is opening
     /// the window without requiring that `WindowBehavior` also be `Send`.
-    type Context: Send + UnwindSafe;
-
+    type Context: Send;
     /// Returns a new window builder for this behavior. When the window is
     /// initialized, a default [`Context`](Self::Context) will be passed.
     fn build<App>(app: &App) -> WindowBuilder<'_, Self, App, AppMessage>
