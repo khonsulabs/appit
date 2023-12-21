@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `AsApplication` is a new trait that can be implemented to resolve to the `App`
   type. This allows wrapper types to be written that hide the appit types.
+- `WindowAttributes` now implement `Debug`.
 
 ## v0.1.1 (2023-12-18)
 

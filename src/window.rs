@@ -98,6 +98,7 @@ where
 /// that `parent_window` accepts a [`Window`] rather than relying on raw window
 /// handle.
 #[allow(clippy::struct_excessive_bools)]
+#[derive(Debug)]
 pub struct WindowAttributes {
     /// The inner size of the window.
     pub inner_size: Option<Size>,
