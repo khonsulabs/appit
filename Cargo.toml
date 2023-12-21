@@ -10,7 +10,7 @@ categories = ["gui"]
 readme = "./README.md"
 
 [features]
-default = ["x11", "wayland", "wayland-dlopen"]
+default = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"]
 wayland-csd-adwaita = ["winit/wayland-csd-adwaita"]
 x11 = ["winit/x11"]
 wayland = ["winit/wayland"]
