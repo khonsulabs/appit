@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - This crate's default features now include `wayland-csd-adwaita`. This enables
   winit's built-in decoration drawing on Wayland.
 
+### Fixed
+
+- `App` now implements `Application`.
+
+### Added
+
+- `AsApplication` is a new trait that can be implemented to resolve to the `App`
+  type. This allows wrapper types to be written that hide the appit types.
+
 ## v0.1.1 (2023-12-18)
 
 ### Fixed

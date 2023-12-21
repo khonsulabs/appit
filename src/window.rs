@@ -16,7 +16,9 @@ use winit::keyboard::PhysicalKey;
 use winit::window::{Fullscreen, Icon, Theme, WindowButtons, WindowId, WindowLevel};
 
 use crate::private::{self, WindowEvent};
-use crate::{App, Application, EventLoopMessage, Message, PendingApp, WindowMessage, Windows};
+use crate::{
+    App, Application, AsApplication, EventLoopMessage, Message, PendingApp, WindowMessage, Windows,
+};
 
 /// A weak reference to a running window.
 #[derive(Debug, Clone)]
@@ -175,7 +177,7 @@ impl Default for WindowAttributes {
 impl<'a, Behavior, Application, AppMessage> WindowBuilder<'a, Behavior, Application, AppMessage>
 where
     Behavior: self::WindowBehavior<AppMessage>,
-    Application: crate::Application<AppMessage>,
+    Application: crate::AsApplication<AppMessage>,
     AppMessage: Message,
 {
     pub(crate) fn new(owner: &'a Application, context: Behavior::Context) -> Self {
@@ -202,7 +204,11 @@ where
         // a fixed-size channel and be cautious to not block the main event loop
         // by always using try_send.
         let (sender, receiver) = mpsc::sync_channel(65536);
-        let Some(winit) = self.owner.open(self.attributes, sender.clone())? else {
+        let Some(winit) = self
+            .owner
+            .as_application()
+            .open(self.attributes, sender.clone())?
+        else {
             return Ok(None);
         };
         let window = Window {
@@ -212,7 +218,7 @@ where
         let running_window = RunningWindow {
             messages: (sender, receiver),
             responses: mpsc::sync_channel(1),
-            app: self.owner.app(),
+            app: self.owner.as_application().app(),
             occluded: winit.is_visible().unwrap_or(false),
             focused: winit.has_focus(),
             inner_size: winit.inner_size(),
@@ -761,7 +767,7 @@ where
     /// initialized, a default [`Context`](Self::Context) will be passed.
     fn build<App>(app: &App) -> WindowBuilder<'_, Self, App, AppMessage>
     where
-        App: Application<AppMessage>,
+        App: AsApplication<AppMessage>,
         Self::Context: Default,
     {
         Self::build_with(app, <Self::Context as Default>::default())
@@ -774,7 +780,7 @@ where
         context: Self::Context,
     ) -> WindowBuilder<'_, Self, App, AppMessage>
     where
-        App: Application<AppMessage>,
+        App: AsApplication<AppMessage>,
     {
         WindowBuilder::new(app, context)
     }
@@ -840,7 +846,7 @@ where
     /// [`winit::window::WindowBuilder::build`].
     fn open<App>(app: &App) -> Result<Option<Window<AppMessage::Window>>, OsError>
     where
-        App: Application<AppMessage>,
+        App: AsApplication<AppMessage>,
         Self::Context: Default,
     {
         Self::build(app).open()
@@ -861,7 +867,7 @@ where
         context: Self::Context,
     ) -> Result<Option<Window<AppMessage::Window>>, OsError>
     where
-        App: Application<AppMessage>,
+        App: AsApplication<AppMessage>,
     {
         Self::build_with(app, context).open()
     }

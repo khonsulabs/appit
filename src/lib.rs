@@ -174,6 +174,27 @@ where
     fn send(&mut self, message: AppMessage) -> Option<AppMessage::Response>;
 }
 
+/// A type that contains a reference to an [`Application`] implementor.
+pub trait AsApplication<AppMessage> {
+    /// Returns this type's application.
+    fn as_application(&self) -> &dyn Application<AppMessage>
+    where
+        AppMessage: Message;
+}
+
+impl<T, AppMessage> AsApplication<AppMessage> for T
+where
+    T: Application<AppMessage>,
+    AppMessage: Message,
+{
+    fn as_application(&self) -> &dyn Application<AppMessage>
+    where
+        AppMessage: Message,
+    {
+        self
+    }
+}
+
 /// A message with an associated response type.
 pub trait Message: Send + 'static {
     /// The message type that is able to be sent to individual windows.
@@ -213,6 +234,52 @@ where
             .windows
             .open(&self.event_loop, window, sender)
             .map(Some)
+    }
+}
+
+impl<AppMessage> Application<AppMessage> for App<AppMessage>
+where
+    AppMessage: Message,
+{
+    fn app(&self) -> App<AppMessage> {
+        self.clone()
+    }
+
+    fn send(&mut self, message: AppMessage) -> Option<<AppMessage as Message>::Response> {
+        let (response_sender, response_receiver) = mpsc::sync_channel(1);
+        self.proxy
+            .send_event(EventLoopMessage::User {
+                message,
+                response_sender,
+            })
+            .ok()?;
+        response_receiver.recv().ok()
+    }
+}
+
+impl<AppMessage> private::ApplicationSealed<AppMessage> for App<AppMessage>
+where
+    AppMessage: Message,
+{
+    fn open(
+        &self,
+        attrs: WindowAttributes,
+        sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
+    ) -> Result<Option<Arc<winit::window::Window>>, OsError> {
+        let (open_sender, open_receiver) = mpsc::sync_channel(1);
+        if self
+            .proxy
+            .send_event(EventLoopMessage::OpenWindow {
+                attrs,
+                sender,
+                open_sender,
+            })
+            .is_err()
+        {
+            return Ok(None);
+        }
+
+        open_receiver.recv().map_or(Ok(None), |opt| opt.map(Some))
     }
 }
 
@@ -282,8 +349,9 @@ impl<Message> Windows<Message> {
             }
             #[cfg(target_os = "windows")]
             {
-                builder =
-                    winit::platform::windows::WindowBuilderExtWindows::with_class_name(builder, app_name);
+                builder = winit::platform::windows::WindowBuilderExtWindows::with_class_name(
+                    builder, app_name,
+                );
             }
         }
 
