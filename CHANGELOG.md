@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `App` now implements `Application`.
+- `Window` is now fully weak. Previously the channel for messages would still
+  remain allocated while instances of `Window` existed. Now, the messages
+  channel is freed as soon as the window is closed.
 
 ### Added
 

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -24,7 +24,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct Window<Message> {
     id: WindowId,
-    sender: mpsc::SyncSender<WindowMessage<Message>>,
+    sender: Weak<mpsc::SyncSender<WindowMessage<Message>>>,
 }
 
 impl<Message> Window<Message> {
@@ -44,7 +44,10 @@ impl<Message> Window<Message> {
     ///
     /// If the window is already closed, this function returns `Err(message)`.
     pub fn send(&self, message: Message) -> Result<(), Message> {
-        match self.sender.send(WindowMessage::User(message)) {
+        let Some(sender) = self.sender.upgrade() else {
+            return Err(message);
+        };
+        match sender.send(WindowMessage::User(message)) {
             Ok(()) => Ok(()),
             Err(mpsc::SendError(WindowMessage::User(message))) => Err(message),
             _ => unreachable!("same input as output"),
@@ -205,6 +208,7 @@ where
         // a fixed-size channel and be cautious to not block the main event loop
         // by always using try_send.
         let (sender, receiver) = mpsc::sync_channel(65536);
+        let sender = Arc::new(sender);
         let Some(winit) = self
             .owner
             .as_application()
@@ -214,7 +218,7 @@ where
         };
         let window = Window {
             id: winit.id(),
-            sender: sender.clone(),
+            sender: Arc::downgrade(&sender),
         };
         let running_window = RunningWindow {
             messages: (sender, receiver),
@@ -241,6 +245,7 @@ where
     }
 }
 
+type SyncArcChannel<T> = (Arc<mpsc::SyncSender<T>>, mpsc::Receiver<T>);
 type SyncChannel<T> = (mpsc::SyncSender<T>, mpsc::Receiver<T>);
 
 /// A window that is running in its own thread.
@@ -250,7 +255,7 @@ where
 {
     window: Arc<winit::window::Window>,
     next_redraw_target: Option<RedrawTarget>,
-    messages: SyncChannel<WindowMessage<AppMessage::Window>>,
+    messages: SyncArcChannel<WindowMessage<AppMessage::Window>>,
     responses: SyncChannel<AppMessage::Response>,
     app: App<AppMessage>,
     inner_size: PhysicalSize<u32>,
@@ -281,7 +286,7 @@ where
     pub fn handle(&self) -> Window<AppMessage::Window> {
         Window {
             id: self.window.id(),
-            sender: self.messages.0.clone(),
+            sender: Arc::downgrade(&self.messages.0),
         }
     }
 
@@ -701,7 +706,7 @@ where
     fn open(
         &self,
         attrs: WindowAttributes,
-        sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
+        sender: Arc<mpsc::SyncSender<WindowMessage<AppMessage::Window>>>,
     ) -> Result<Option<Arc<winit::window::Window>>, OsError> {
         let (open_sender, open_receiver) = mpsc::sync_channel(1);
         if self

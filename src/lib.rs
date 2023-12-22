@@ -228,7 +228,7 @@ where
     fn open(
         &self,
         window: WindowAttributes,
-        sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
+        sender: Arc<mpsc::SyncSender<WindowMessage<AppMessage::Window>>>,
     ) -> Result<Option<Arc<winit::window::Window>>, OsError> {
         self.running
             .windows
@@ -264,7 +264,7 @@ where
     fn open(
         &self,
         attrs: WindowAttributes,
-        sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
+        sender: Arc<mpsc::SyncSender<WindowMessage<AppMessage::Window>>>,
     ) -> Result<Option<Arc<winit::window::Window>>, OsError> {
         let (open_sender, open_receiver) = mpsc::sync_channel(1);
         if self
@@ -317,7 +317,7 @@ impl<Message> Windows<Message> {
         &self,
         target: &EventLoopWindowTarget<EventLoopMessage<AppMessage>>,
         attrs: WindowAttributes,
-        sender: mpsc::SyncSender<WindowMessage<Message>>,
+        sender: Arc<mpsc::SyncSender<WindowMessage<Message>>>,
     ) -> Result<Arc<winit::window::Window>, OsError>
     where
         AppMessage: crate::Message<Window = Message>,
@@ -407,5 +407,5 @@ impl<Message> Windows<Message> {
 
 struct OpenWindow<User> {
     winit: Arc<winit::window::Window>,
-    sender: mpsc::SyncSender<WindowMessage<User>>,
+    sender: Arc<mpsc::SyncSender<WindowMessage<User>>>,
 }

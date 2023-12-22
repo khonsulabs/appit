@@ -20,7 +20,7 @@ where
     fn open(
         &self,
         window: WindowAttributes,
-        sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
+        sender: Arc<mpsc::SyncSender<WindowMessage<AppMessage::Window>>>,
     ) -> Result<Option<Arc<winit::window::Window>>, OsError>;
 }
 
@@ -30,7 +30,7 @@ where
 {
     OpenWindow {
         attrs: WindowAttributes,
-        sender: mpsc::SyncSender<WindowMessage<AppMessage::Window>>,
+        sender: Arc<mpsc::SyncSender<WindowMessage<AppMessage::Window>>>,
         open_sender: mpsc::SyncSender<Result<Arc<winit::window::Window>, OsError>>,
     },
     CloseWindow(WindowId),
