@@ -66,6 +66,7 @@ pub struct WindowBuilder<'a, Behavior, Application, AppMessage>
 where
     Behavior: self::WindowBehavior<AppMessage>,
     AppMessage: Message,
+    Application: ?Sized,
 {
     owner: &'a Application,
     context: Behavior::Context,
@@ -76,6 +77,7 @@ impl<'a, Behavior, Application, AppMessage> Deref
 where
     Behavior: self::WindowBehavior<AppMessage>,
     AppMessage: Message,
+    Application: ?Sized,
 {
     type Target = WindowAttributes;
 
@@ -89,6 +91,7 @@ impl<'a, Behavior, Application, AppMessage> DerefMut
 where
     Behavior: self::WindowBehavior<AppMessage>,
     AppMessage: Message,
+    Application: ?Sized,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.attributes
@@ -181,7 +184,7 @@ impl Default for WindowAttributes {
 impl<'a, Behavior, Application, AppMessage> WindowBuilder<'a, Behavior, Application, AppMessage>
 where
     Behavior: self::WindowBehavior<AppMessage>,
-    Application: crate::AsApplication<AppMessage>,
+    Application: crate::AsApplication<AppMessage> + ?Sized,
     AppMessage: Message,
 {
     pub(crate) fn new(owner: &'a Application, context: Behavior::Context) -> Self {
@@ -773,7 +776,7 @@ where
     /// initialized, a default [`Context`](Self::Context) will be passed.
     fn build<App>(app: &App) -> WindowBuilder<'_, Self, App, AppMessage>
     where
-        App: AsApplication<AppMessage>,
+        App: AsApplication<AppMessage> + ?Sized,
         Self::Context: Default,
     {
         Self::build_with(app, <Self::Context as Default>::default())
@@ -786,7 +789,7 @@ where
         context: Self::Context,
     ) -> WindowBuilder<'_, Self, App, AppMessage>
     where
-        App: AsApplication<AppMessage>,
+        App: AsApplication<AppMessage> + ?Sized,
     {
         WindowBuilder::new(app, context)
     }
@@ -852,7 +855,7 @@ where
     /// [`winit::window::WindowBuilder::build`].
     fn open<App>(app: &App) -> Result<Option<Window<AppMessage::Window>>, OsError>
     where
-        App: AsApplication<AppMessage>,
+        App: AsApplication<AppMessage> + ?Sized,
         Self::Context: Default,
     {
         Self::build(app).open()
@@ -873,7 +876,7 @@ where
         context: Self::Context,
     ) -> Result<Option<Window<AppMessage::Window>>, OsError>
     where
-        App: AsApplication<AppMessage>,
+        App: AsApplication<AppMessage> + ?Sized,
     {
         Self::build_with(app, context).open()
     }
