@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Breaking Changes
+
+- This crate no longer specifies a specific raw-window-handle flag for winit.
+  This crate will maintain feature flags that allow picking whatever versions
+  winit is exposing. As of writing this note, the choices are `rwh_05` and
+  `rwh_06`. `rwh_05` was the feature that was activated in v0.2.0.
+
 ### Changed
 
 - All `&Appplication` bounds now are `?Sized`, enabling `&dyn Application`
