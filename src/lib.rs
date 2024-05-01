@@ -11,13 +11,12 @@ use std::collections::HashMap;
 use std::process::exit;
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
 
+use private::{OpenedWindow, WindowSpawner};
 pub use window::{RunningWindow, Window, WindowAttributes, WindowBehavior, WindowBuilder};
 pub use winit;
+use winit::application::ApplicationHandler;
 use winit::error::{EventLoopError, OsError};
-use winit::event::Event;
-use winit::event_loop::{
-    ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget,
-};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::WindowId;
 
 use crate::private::{EventLoopMessage, WindowEvent, WindowMessage};
@@ -30,6 +29,16 @@ where
     event_loop: EventLoop<EventLoopMessage<AppMessage>>,
     message_callback: BoxedEventCallback<AppMessage>,
     running: App<AppMessage>,
+    pending_windows: Vec<PendingWindow<AppMessage>>,
+}
+
+struct PendingWindow<AppMessage>
+where
+    AppMessage: Message,
+{
+    window: WindowAttributes,
+    sender: Arc<mpsc::SyncSender<WindowMessage<AppMessage::Window>>>,
+    spawner: WindowSpawner,
 }
 
 type BoxedEventCallback<AppMessage> = Box<
@@ -65,7 +74,7 @@ where
         event_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
             + 'static,
     ) -> Self {
-        let event_loop = EventLoopBuilder::with_user_event()
+        let event_loop = EventLoop::with_user_event()
             .build()
             .expect("should be able to create an EventLoop");
         let proxy = event_loop.create_proxy();
@@ -76,6 +85,7 @@ where
                 windows: Windows::default(),
             },
             message_callback: Box::new(event_callback),
+            pending_windows: Vec::new(),
         }
     }
 
@@ -87,52 +97,96 @@ where
     ///
     /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
     /// [`EventLoop::run`] for more information.
-    pub fn run(mut self) -> Result<(), EventLoopError> {
-        self.event_loop.run(move |event, target| {
-            target.set_control_flow(ControlFlow::Wait);
-            match event {
-                Event::WindowEvent { window_id, event } => {
-                    let event = WindowEvent::from(event);
-                    self.running
-                        .windows
-                        .send(window_id, WindowMessage::Event(event));
-                }
-                Event::UserEvent(message) => match message {
-                    EventLoopMessage::CloseWindow(window_id) => {
-                        if self.running.windows.close(window_id) {
-                            exit(0)
-                        }
-                    }
-                    EventLoopMessage::WindowPanic(window_id) => {
-                        if self.running.windows.close(window_id) {
-                            exit(1)
-                        }
-                    }
-                    EventLoopMessage::OpenWindow {
-                        attrs,
-                        sender,
-                        open_sender,
-                    } => {
-                        let result = self.running.windows.open(target, attrs, sender);
-                        let _result = open_sender.send(result);
-                    }
-                    EventLoopMessage::User {
-                        message,
-                        response_sender,
-                    } => {
-                        let _result = response_sender
-                            .send((self.message_callback)(message, &self.running.windows));
-                    }
-                },
-                Event::NewEvents(_)
-                | Event::MemoryWarning
-                | Event::DeviceEvent { .. }
-                | Event::Suspended
-                | Event::Resumed
-                | Event::LoopExiting
-                | Event::AboutToWait => {}
-            }
+    pub fn run(self) -> Result<(), EventLoopError> {
+        let Self {
+            event_loop,
+            message_callback,
+            running,
+            pending_windows,
+        } = self;
+        event_loop.run_app(&mut RunningApp::<AppMessage> {
+            message_callback,
+            running,
+            pending_windows,
         })
+    }
+}
+
+struct RunningApp<AppMessage>
+where
+    AppMessage: Message,
+{
+    message_callback: BoxedEventCallback<AppMessage>,
+    running: App<AppMessage>,
+    pending_windows: Vec<PendingWindow<AppMessage>>,
+}
+
+impl<AppMessage> ApplicationHandler<EventLoopMessage<AppMessage>> for RunningApp<AppMessage>
+where
+    AppMessage: Message,
+{
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        event_loop.set_control_flow(ControlFlow::Wait);
+        for PendingWindow {
+            window,
+            sender,
+            spawner,
+        } in self.pending_windows.drain(..)
+        {
+            // TODO how to handle open failure errors for pending windows?
+            let window = self
+                .running
+                .windows
+                .open(event_loop, window, sender)
+                .expect("error spawning initial window");
+            spawner(window);
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        let event = WindowEvent::from(event);
+        self.running
+            .windows
+            .send(window_id, WindowMessage::Event(event));
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, message: EventLoopMessage<AppMessage>) {
+        match message {
+            EventLoopMessage::CloseWindow(window_id) => {
+                if self.running.windows.close(window_id) {
+                    exit(0)
+                }
+            }
+            EventLoopMessage::WindowPanic(window_id) => {
+                if self.running.windows.close(window_id) {
+                    exit(1)
+                }
+            }
+            EventLoopMessage::OpenWindow {
+                attrs,
+                sender,
+                open_sender,
+                spawner,
+            } => {
+                let result = self.running.windows.open(event_loop, attrs, sender);
+                if let Ok(open) = &result {
+                    spawner(open.clone());
+                }
+                let _result = open_sender.send(result);
+            }
+            EventLoopMessage::User {
+                message,
+                response_sender,
+            } => {
+                let _result =
+                    response_sender.send((self.message_callback)(message, &self.running.windows));
+            }
+        }
     }
 }
 
@@ -180,6 +234,11 @@ pub trait AsApplication<AppMessage> {
     fn as_application(&self) -> &dyn Application<AppMessage>
     where
         AppMessage: Message;
+
+    /// Returns this type's application.
+    fn as_application_mut(&mut self) -> &mut dyn Application<AppMessage>
+    where
+        AppMessage: Message;
 }
 
 impl<T, AppMessage> AsApplication<AppMessage> for T
@@ -188,6 +247,13 @@ where
     AppMessage: Message,
 {
     fn as_application(&self) -> &dyn Application<AppMessage>
+    where
+        AppMessage: Message,
+    {
+        self
+    }
+
+    fn as_application_mut(&mut self) -> &mut dyn Application<AppMessage>
     where
         AppMessage: Message,
     {
@@ -226,14 +292,17 @@ where
     AppMessage: Message,
 {
     fn open(
-        &self,
+        &mut self,
         window: WindowAttributes,
         sender: Arc<mpsc::SyncSender<WindowMessage<AppMessage::Window>>>,
-    ) -> Result<Option<Arc<winit::window::Window>>, OsError> {
-        self.running
-            .windows
-            .open(&self.event_loop, window, sender)
-            .map(Some)
+        spawner: WindowSpawner,
+    ) -> Result<Option<OpenedWindow>, OsError> {
+        self.pending_windows.push(PendingWindow {
+            window,
+            sender,
+            spawner,
+        });
+        Ok(None)
     }
 }
 
@@ -262,10 +331,11 @@ where
     AppMessage: Message,
 {
     fn open(
-        &self,
+        &mut self,
         attrs: WindowAttributes,
         sender: Arc<mpsc::SyncSender<WindowMessage<AppMessage::Window>>>,
-    ) -> Result<Option<Arc<winit::window::Window>>, OsError> {
+        spawner: WindowSpawner,
+    ) -> Result<Option<OpenedWindow>, OsError> {
         let (open_sender, open_receiver) = mpsc::sync_channel(1);
         if self
             .proxy
@@ -273,6 +343,7 @@ where
                 attrs,
                 sender,
                 open_sender,
+                spawner,
             })
             .is_err()
         {
@@ -305,24 +376,21 @@ impl<Message> Clone for Windows<Message> {
 }
 
 impl<Message> Windows<Message> {
-    /// Gets an instance of the winit window for the given window id, if it is
-    /// still open.
+    /// Gets an instance of the winit window for the given window id, if it has
+    /// been opened and is still open.
     pub fn get(&self, id: WindowId) -> Option<Arc<winit::window::Window>> {
         let windows = self.data.lock().map_or_else(PoisonError::into_inner, |g| g);
-        windows.get(&id).map(|w| w.winit.clone())
+        windows.get(&id).and_then(|w| w.winit.winit())
     }
 
     #[allow(unsafe_code)]
-    fn open<AppMessage>(
+    fn open(
         &self,
-        target: &EventLoopWindowTarget<EventLoopMessage<AppMessage>>,
+        target: &ActiveEventLoop,
         attrs: WindowAttributes,
         sender: Arc<mpsc::SyncSender<WindowMessage<Message>>>,
-    ) -> Result<Arc<winit::window::Window>, OsError>
-    where
-        AppMessage: crate::Message<Window = Message>,
-    {
-        let mut builder = winit::window::WindowBuilder::new()
+    ) -> Result<OpenedWindow, OsError> {
+        let mut builder = winit::window::WindowAttributes::default()
             .with_active(attrs.active)
             .with_resizable(attrs.resizable)
             .with_enabled_buttons(attrs.enabled_buttons)
@@ -370,10 +438,12 @@ impl<Message> Windows<Message> {
         if let Some(resize_increments) = attrs.resize_increments {
             builder = builder.with_resize_increments(resize_increments);
         }
-        let winit = Arc::new(builder.build(target)?);
+        let winit = Arc::new(target.create_window(builder)?);
+        let id = winit.id();
+        let winit = OpenedWindow(Arc::new(Mutex::new(Some(winit))));
         let mut windows = self.data.lock().map_or_else(PoisonError::into_inner, |g| g);
         windows.insert(
-            winit.id(),
+            id,
             OpenWindow {
                 winit: winit.clone(),
                 sender,
@@ -406,6 +476,6 @@ impl<Message> Windows<Message> {
 }
 
 struct OpenWindow<User> {
-    winit: Arc<winit::window::Window>,
+    winit: OpenedWindow,
     sender: Arc<mpsc::SyncSender<WindowMessage<User>>>,
 }

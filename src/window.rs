@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Weak};
+use std::sync::{mpsc, Arc, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -15,7 +15,7 @@ use winit::event::{
 use winit::keyboard::PhysicalKey;
 use winit::window::{Fullscreen, Icon, Theme, WindowButtons, WindowId, WindowLevel};
 
-use crate::private::{self, WindowEvent};
+use crate::private::{self, OpenedWindow, WindowEvent, WindowSpawner};
 use crate::{
     App, Application, AsApplication, EventLoopMessage, Message, PendingApp, WindowMessage, Windows,
 };
@@ -23,15 +23,20 @@ use crate::{
 /// A weak reference to a running window.
 #[derive(Debug, Clone)]
 pub struct Window<Message> {
-    id: WindowId,
+    opened: OpenedWindow,
     sender: Weak<mpsc::SyncSender<WindowMessage<Message>>>,
 }
 
 impl<Message> Window<Message> {
     /// Returns the winit id of the window.
     #[must_use]
-    pub const fn id(&self) -> WindowId {
-        self.id
+    pub fn id(&self) -> Option<WindowId> {
+        self.opened
+            .0
+            .lock()
+            .map_or_else(PoisonError::into_inner, |g| g)
+            .as_ref()
+            .map(|w| w.id())
     }
 
     /// Sends a message to the window.
@@ -68,7 +73,7 @@ where
     AppMessage: Message,
     Application: ?Sized,
 {
-    owner: &'a Application,
+    owner: &'a mut Application,
     context: Behavior::Context,
     attributes: WindowAttributes,
 }
@@ -156,7 +161,7 @@ pub struct WindowAttributes {
 impl Default for WindowAttributes {
     fn default() -> Self {
         let defaults = winit::window::WindowAttributes::default();
-        let fullscreen = defaults.fullscreen().cloned();
+        let fullscreen = defaults.fullscreen.clone();
         Self {
             inner_size: defaults.inner_size,
             min_inner_size: defaults.min_inner_size,
@@ -187,7 +192,7 @@ where
     Application: crate::AsApplication<AppMessage> + ?Sized,
     AppMessage: Message,
 {
-    pub(crate) fn new(owner: &'a Application, context: Behavior::Context) -> Self {
+    pub(crate) fn new(owner: &'a mut Application, context: Behavior::Context) -> Self {
         Self {
             owner,
             context,
@@ -212,37 +217,45 @@ where
         // by always using try_send.
         let (sender, receiver) = mpsc::sync_channel(65536);
         let sender = Arc::new(sender);
-        let Some(winit) = self
-            .owner
-            .as_application()
-            .open(self.attributes, sender.clone())?
+        let app = self.owner.as_application().app();
+        let Some(winit) = self.owner.as_application_mut().open(
+            self.attributes,
+            sender.clone(),
+            Box::new({
+                let sender = sender.clone();
+                move |opened| {
+                    let winit = opened.winit().expect("just opened");
+                    let running_window = RunningWindow {
+                        messages: (sender, receiver),
+                        responses: mpsc::sync_channel(1),
+                        app,
+                        occluded: winit.is_visible().unwrap_or(false),
+                        focused: winit.has_focus(),
+                        inner_size: winit.inner_size(),
+                        position: winit.inner_position().unwrap_or_default(),
+                        scale: winit.scale_factor(),
+                        theme: winit.theme().unwrap_or(Theme::Dark),
+                        window: winit,
+                        opened,
+                        next_redraw_target: None,
+                        close: false,
+                        modifiers: Modifiers::default(),
+                        cursor_position: None,
+                        mouse_buttons: HashSet::default(),
+                        keys: HashSet::default(),
+                    };
+
+                    thread::spawn(move || running_window.run_with::<Behavior>(self.context));
+                }
+            }),
+        )?
         else {
             return Ok(None);
         };
         let window = Window {
-            id: winit.id(),
+            opened: winit.clone(),
             sender: Arc::downgrade(&sender),
         };
-        let running_window = RunningWindow {
-            messages: (sender, receiver),
-            responses: mpsc::sync_channel(1),
-            app: self.owner.as_application().app(),
-            occluded: winit.is_visible().unwrap_or(false),
-            focused: winit.has_focus(),
-            inner_size: winit.inner_size(),
-            position: winit.inner_position().unwrap_or_default(),
-            scale: winit.scale_factor(),
-            theme: winit.theme().unwrap_or(Theme::Dark),
-            window: winit,
-            next_redraw_target: None,
-            close: false,
-            modifiers: Modifiers::default(),
-            cursor_position: None,
-            mouse_buttons: HashSet::default(),
-            keys: HashSet::default(),
-        };
-
-        thread::spawn(move || running_window.run_with::<Behavior>(self.context));
 
         Ok(Some(window))
     }
@@ -257,6 +270,7 @@ where
     AppMessage: Message,
 {
     window: Arc<winit::window::Window>,
+    opened: OpenedWindow,
     next_redraw_target: Option<RedrawTarget>,
     messages: SyncArcChannel<WindowMessage<AppMessage::Window>>,
     responses: SyncChannel<AppMessage::Response>,
@@ -288,7 +302,7 @@ where
     #[must_use]
     pub fn handle(&self) -> Window<AppMessage::Window> {
         Window {
-            id: self.window.id(),
+            opened: self.opened.clone(),
             sender: Arc::downgrade(&self.messages.0),
         }
     }
@@ -625,24 +639,31 @@ where
                 WindowEvent::Touch(touch) => {
                     behavior.touch(self, touch);
                 }
-                WindowEvent::TouchpadMagnify {
+                WindowEvent::PinchGesture {
                     device_id,
                     delta,
                     phase,
                 } => {
-                    behavior.touchpad_magnify(self, device_id, delta, phase);
+                    behavior.pinch_gesture(self, device_id, delta, phase);
                 }
-                WindowEvent::SmartMagnify { device_id } => {
-                    behavior.smart_magnify(self, device_id);
+                WindowEvent::PanGesture {
+                    device_id,
+                    delta,
+                    phase,
+                } => {
+                    behavior.pan_gesture(self, device_id, delta, phase);
                 }
-                WindowEvent::TouchpadRotate {
+                WindowEvent::DoubleTapGesture { device_id } => {
+                    behavior.double_tap_gesture(self, device_id);
+                }
+                WindowEvent::RotationGesture {
                     device_id,
                     delta,
                     phase,
                 } => {
                     behavior.touchpad_rotate(self, device_id, delta, phase);
                 }
-                WindowEvent::ActivationTokenDone { .. } => todo!(),
+                WindowEvent::ActivationTokenDone { .. } => {}
             },
         }
 
@@ -707,10 +728,11 @@ where
     AppMessage: Message,
 {
     fn open(
-        &self,
+        &mut self,
         attrs: WindowAttributes,
         sender: Arc<mpsc::SyncSender<WindowMessage<AppMessage::Window>>>,
-    ) -> Result<Option<Arc<winit::window::Window>>, OsError> {
+        spawner: WindowSpawner,
+    ) -> Result<Option<OpenedWindow>, OsError> {
         let (open_sender, open_receiver) = mpsc::sync_channel(1);
         if self
             .app
@@ -719,6 +741,7 @@ where
                 attrs,
                 sender,
                 open_sender,
+                spawner,
             })
             .is_ok()
         {
@@ -774,7 +797,7 @@ where
     type Context: Send;
     /// Returns a new window builder for this behavior. When the window is
     /// initialized, a default [`Context`](Self::Context) will be passed.
-    fn build<App>(app: &App) -> WindowBuilder<'_, Self, App, AppMessage>
+    fn build<App>(app: &mut App) -> WindowBuilder<'_, Self, App, AppMessage>
     where
         App: AsApplication<AppMessage> + ?Sized,
         Self::Context: Default,
@@ -785,7 +808,7 @@ where
     /// Returns a new window builder for this behavior. When the window is
     /// initialized, the provided context will be passed.
     fn build_with<App>(
-        app: &App,
+        app: &mut App,
         context: Self::Context,
     ) -> WindowBuilder<'_, Self, App, AppMessage>
     where
@@ -815,8 +838,8 @@ where
     where
         Self::Context: Default,
     {
-        let app = PendingApp::new_with_event_callback(app_callback);
-        Self::open(&app).expect("error opening initial window");
+        let mut app = PendingApp::new_with_event_callback(app_callback);
+        Self::open(&mut app).expect("error opening initial window");
         app.run()
     }
 
@@ -838,8 +861,8 @@ where
         app_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
             + 'static,
     ) -> Result<(), EventLoopError> {
-        let app = PendingApp::new_with_event_callback(app_callback);
-        Self::open_with(&app, context).expect("error opening initial window");
+        let mut app = PendingApp::new_with_event_callback(app_callback);
+        Self::open_with(&mut app, context).expect("error opening initial window");
         app.run()
     }
 
@@ -853,7 +876,7 @@ where
     ///
     /// The only errors this funciton can return arise from
     /// [`winit::window::WindowBuilder::build`].
-    fn open<App>(app: &App) -> Result<Option<Window<AppMessage::Window>>, OsError>
+    fn open<App>(app: &mut App) -> Result<Option<Window<AppMessage::Window>>, OsError>
     where
         App: AsApplication<AppMessage> + ?Sized,
         Self::Context: Default,
@@ -872,7 +895,7 @@ where
     /// The only errors this funciton can return arise from
     /// [`winit::window::WindowBuilder::build`].
     fn open_with<App>(
-        app: &App,
+        app: &mut App,
         context: Self::Context,
     ) -> Result<Option<Window<AppMessage::Window>>, OsError>
     where
@@ -1025,9 +1048,9 @@ where
     #[allow(unused_variables)]
     fn touch(&mut self, window: &mut RunningWindow<AppMessage>, touch: Touch) {}
 
-    /// A touchpad-originated magnification gesture.
+    /// A magnification gesture.
     #[allow(unused_variables)]
-    fn touchpad_magnify(
+    fn pinch_gesture(
         &mut self,
         window: &mut RunningWindow<AppMessage>,
         device_id: DeviceId,
@@ -1036,9 +1059,20 @@ where
     ) {
     }
 
+    /// A pan/scroll gesture.
+    #[allow(unused_variables)]
+    fn pan_gesture(
+        &mut self,
+        window: &mut RunningWindow<AppMessage>,
+        device_id: DeviceId,
+        delta: PhysicalPosition<f32>,
+        phase: TouchPhase,
+    ) {
+    }
+
     /// A request to smart-magnify the window.
     #[allow(unused_variables)]
-    fn smart_magnify(&mut self, window: &mut RunningWindow<AppMessage>, device_id: DeviceId) {}
+    fn double_tap_gesture(&mut self, window: &mut RunningWindow<AppMessage>, device_id: DeviceId) {}
 
     /// A touchpad-originated rotation gesture.
     #[allow(unused_variables)]
@@ -1066,8 +1100,8 @@ pub trait Run: WindowBehavior<()> {
     where
         Self::Context: Default,
     {
-        let app = PendingApp::new();
-        Self::open(&app).expect("error opening initial window");
+        let mut app = PendingApp::new();
+        Self::open(&mut app).expect("error opening initial window");
         app.run()
     }
 
@@ -1076,8 +1110,8 @@ pub trait Run: WindowBehavior<()> {
     /// This function is shorthand for creating a [`PendingApp`], opening this
     /// window inside of it, and running the pending app.
     fn run_with(context: Self::Context) -> Result<(), EventLoopError> {
-        let app = PendingApp::new();
-        Self::open_with(&app, context).expect("error opening initial window");
+        let mut app = PendingApp::new();
+        Self::open_with(&mut app, context).expect("error opening initial window");
         app.run()
     }
 }

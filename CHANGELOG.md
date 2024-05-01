@@ -13,11 +13,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This crate will maintain feature flags that allow picking whatever versions
   winit is exposing. As of writing this note, the choices are `rwh_05` and
   `rwh_06`. `rwh_05` was the feature that was activated in v0.2.0.
+- `winit` has been updated to 0.30.0.
+- `Window::id` now returns `Option<WindowId>`, as a window may be opened before
+  the event loop has been started.
+- `WindowBehavior::build`, `WindowBehavior::build_with`, `WindowBehavior::open`,
+  and `WindowBehavior::open_with` now require exclusive references to the
+  application.
+- These gesture events have been renamed to match `winit`'s updated nomenclature:
+  - `WindowBehavior::touchpad_magnify` -> `WindowBehavior::pinch_gesture`
+  - `WindowBehavior::smart_magnify` -> `WindowBehavior::double_tap_gesture`
 
 ### Changed
 
 - All `&Appplication` bounds now are `?Sized`, enabling `&dyn Application`
   parameters.
+
+### Added
+
+- `AsApplication` now provides `as_application_mut`.
+- `WindowBeahvior::pan_gesture` is a new event provided by `winit`.
 
 ## v0.2.0 (2023-12-27)
 

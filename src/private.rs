@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex, PoisonError};
 
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::error::OsError;
@@ -13,15 +13,30 @@ use winit::window::{ActivationToken, Theme, WindowId};
 use crate::window::WindowAttributes;
 use crate::Message;
 
+pub type WindowSpawner = Box<dyn FnOnce(OpenedWindow) + Send + 'static>;
+
 pub trait ApplicationSealed<AppMessage>
 where
     AppMessage: Message,
 {
     fn open(
-        &self,
+        &mut self,
         window: WindowAttributes,
         sender: Arc<mpsc::SyncSender<WindowMessage<AppMessage::Window>>>,
-    ) -> Result<Option<Arc<winit::window::Window>>, OsError>;
+        spawner: WindowSpawner,
+    ) -> Result<Option<OpenedWindow>, OsError>;
+}
+
+#[derive(Clone, Debug)]
+pub struct OpenedWindow(pub(crate) Arc<Mutex<Option<Arc<winit::window::Window>>>>);
+
+impl OpenedWindow {
+    pub fn winit(&self) -> Option<Arc<winit::window::Window>> {
+        self.0
+            .lock()
+            .map_or_else(PoisonError::into_inner, |g| g)
+            .clone()
+    }
 }
 
 pub enum EventLoopMessage<AppMessage>
@@ -31,7 +46,8 @@ where
     OpenWindow {
         attrs: WindowAttributes,
         sender: Arc<mpsc::SyncSender<WindowMessage<AppMessage::Window>>>,
-        open_sender: mpsc::SyncSender<Result<Arc<winit::window::Window>, OsError>>,
+        open_sender: mpsc::SyncSender<Result<OpenedWindow, OsError>>,
+        spawner: WindowSpawner,
     },
     CloseWindow(WindowId),
     WindowPanic(WindowId),
@@ -219,15 +235,20 @@ pub enum WindowEvent {
     /// - **iOS / Android / Web / Wayland / Windows:** Unsupported.
     Occluded(bool),
 
-    TouchpadMagnify {
+    PinchGesture {
         device_id: DeviceId,
         delta: f64,
         phase: TouchPhase,
     },
-    SmartMagnify {
+    PanGesture {
+        device_id: DeviceId,
+        delta: PhysicalPosition<f32>,
+        phase: TouchPhase,
+    },
+    DoubleTapGesture {
         device_id: DeviceId,
     },
-    TouchpadRotate {
+    RotationGesture {
         device_id: DeviceId,
         delta: f32,
         phase: TouchPhase,
@@ -329,23 +350,30 @@ impl From<winit::event::WindowEvent> for WindowEvent {
             },
             winit::event::WindowEvent::ThemeChanged(theme) => Self::ThemeChanged(theme),
             winit::event::WindowEvent::Occluded(occluded) => Self::Occluded(occluded),
-            winit::event::WindowEvent::TouchpadMagnify {
+            winit::event::WindowEvent::PinchGesture {
                 device_id,
                 delta,
                 phase,
-            } => Self::TouchpadMagnify {
+            } => Self::PinchGesture {
                 device_id,
                 delta,
                 phase,
             },
-            winit::event::WindowEvent::SmartMagnify { device_id } => {
-                Self::SmartMagnify { device_id }
+            winit::event::WindowEvent::PanGesture { device_id, delta, phase } => {
+                Self::PanGesture {
+                    device_id,
+                    delta,
+                    phase,
+                }
             }
-            winit::event::WindowEvent::TouchpadRotate {
+            winit::event::WindowEvent::DoubleTapGesture { device_id } => {
+                Self::DoubleTapGesture { device_id }
+            }
+            winit::event::WindowEvent::RotationGesture {
                 device_id,
                 delta,
                 phase,
-            } => Self::TouchpadRotate {
+            } => Self::RotationGesture {
                 device_id,
                 delta,
                 phase,
