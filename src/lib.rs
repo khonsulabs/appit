@@ -405,9 +405,9 @@ impl<Message> Windows<Message> {
             .with_window_icon(attrs.window_icon)
             .with_theme(attrs.preferred_theme);
 
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(any(all(target_os = "linux", feature = "wayland"), target_os = "windows"))]
         if let Some(app_name) = &attrs.app_name {
-            #[cfg(target_os = "linux")]
+            #[cfg(all(target_os = "linux", feature = "wayland"))]
             {
                 builder = winit::platform::wayland::WindowAttributesExtWayland::with_name(
                     builder, app_name, "",
