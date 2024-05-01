@@ -409,15 +409,15 @@ impl<Message> Windows<Message> {
         if let Some(app_name) = &attrs.app_name {
             #[cfg(target_os = "linux")]
             {
-                builder = winit::platform::wayland::WindowBuilderExtWayland::with_name(
+                builder = winit::platform::wayland::WindowAttributesExtWayland::with_name(
                     builder, app_name, "",
                 );
                 builder =
-                    winit::platform::x11::WindowBuilderExtX11::with_name(builder, app_name, "");
+                    winit::platform::x11::WindowAttributesExtX11::with_name(builder, app_name, "");
             }
             #[cfg(target_os = "windows")]
             {
-                builder = winit::platform::windows::WindowBuilderExtWindows::with_class_name(
+                builder = winit::platform::windows::WindowAttributesExtWindows::with_class_name(
                     builder, app_name,
                 );
             }
