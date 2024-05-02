@@ -2,6 +2,7 @@
 name = "appit"
 version = "0.2.0"
 edition = "2021"
+rust-version = "1.70.0"
 description = "A math library specialized for 2d screen graphics."
 repository = "https://github.com/khonsulabs/appit"
 license = "MIT OR Apache-2.0"
