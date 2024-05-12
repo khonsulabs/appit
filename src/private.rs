@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::error::OsError;
@@ -34,7 +35,7 @@ impl OpenedWindow {
     pub fn winit(&self) -> Option<Arc<winit::window::Window>> {
         self.0
             .lock()
-            .map_or_else(PoisonError::into_inner, |g| g)
+            .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 }
@@ -64,8 +65,32 @@ pub enum WindowMessage<User> {
 }
 
 #[derive(Debug)]
+pub struct RedrawGuard(mpsc::SyncSender<()>);
+
+impl Drop for RedrawGuard {
+    fn drop(&mut self) {
+        let _ignored = self.0.send(());
+    }
+}
+
+pub struct WaitForRedraw(mpsc::Receiver<()>);
+
+impl WaitForRedraw {
+    pub fn wait(self, timeout: Duration) {
+        let _result = self.0.recv_timeout(timeout);
+    }
+}
+
+impl RedrawGuard {
+    pub fn new() -> (Self, WaitForRedraw) {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        (Self(sender), WaitForRedraw(receiver))
+    }
+}
+
+#[derive(Debug)]
 pub enum WindowEvent {
-    RedrawRequested,
+    RedrawRequested(RedrawGuard),
 
     /// The size of the window has changed. Contains the client area's new dimensions.
     Resized(PhysicalSize<u32>),
@@ -262,11 +287,15 @@ pub enum WindowEvent {
     },
 }
 
-impl From<winit::event::WindowEvent> for WindowEvent {
+impl WindowEvent {
     #[allow(clippy::too_many_lines)] // it's a match statement
-    fn from(event: winit::event::WindowEvent) -> Self {
-        match event {
-            winit::event::WindowEvent::RedrawRequested => Self::RedrawRequested,
+    pub fn from_winit(event: winit::event::WindowEvent) -> (Self, Option<WaitForRedraw>) {
+        (
+            match event {
+            winit::event::WindowEvent::RedrawRequested => {
+                let (guard, wait) = RedrawGuard::new();
+                return (Self::RedrawRequested(guard), Some(wait))
+            },
             winit::event::WindowEvent::Resized(size) => Self::Resized(size),
             winit::event::WindowEvent::Moved(pos) => Self::Moved(pos),
             winit::event::WindowEvent::CloseRequested => Self::CloseRequested,
@@ -381,6 +410,8 @@ impl From<winit::event::WindowEvent> for WindowEvent {
             winit::event::WindowEvent::ActivationTokenDone { serial, token } => {
                 Self::ActivationTokenDone { serial, token }
             }
-        }
+        },
+            None,
+        )
     }
 }

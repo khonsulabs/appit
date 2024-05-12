@@ -10,9 +10,10 @@ mod window;
 use std::collections::HashMap;
 use std::process::exit;
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use private::{OpenedWindow, WindowSpawner};
-pub use window::{RunningWindow, Window, WindowAttributes, WindowBehavior, WindowBuilder};
+pub use window::{Run, RunningWindow, Window, WindowAttributes, WindowBehavior, WindowBuilder};
 pub use winit;
 use winit::application::ApplicationHandler;
 use winit::error::{EventLoopError, OsError};
@@ -149,10 +150,13 @@ where
         window_id: WindowId,
         event: winit::event::WindowEvent,
     ) {
-        let event = WindowEvent::from(event);
+        let (event, waiter) = WindowEvent::from_winit(event);
         self.running
             .windows
             .send(window_id, WindowMessage::Event(event));
+        if let Some(waiter) = waiter {
+            waiter.wait(Duration::from_millis(16));
+        }
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, message: EventLoopMessage<AppMessage>) {
@@ -379,7 +383,7 @@ impl<Message> Windows<Message> {
     /// Gets an instance of the winit window for the given window id, if it has
     /// been opened and is still open.
     pub fn get(&self, id: WindowId) -> Option<Arc<winit::window::Window>> {
-        let windows = self.data.lock().map_or_else(PoisonError::into_inner, |g| g);
+        let windows = self.data.lock().unwrap_or_else(PoisonError::into_inner);
         windows.get(&id).and_then(|w| w.winit.winit())
     }
 
@@ -441,7 +445,7 @@ impl<Message> Windows<Message> {
         let winit = Arc::new(target.create_window(builder)?);
         let id = winit.id();
         let winit = OpenedWindow(Arc::new(Mutex::new(Some(winit))));
-        let mut windows = self.data.lock().map_or_else(PoisonError::into_inner, |g| g);
+        let mut windows = self.data.lock().unwrap_or_else(PoisonError::into_inner);
         windows.insert(
             id,
             OpenWindow {
@@ -453,7 +457,7 @@ impl<Message> Windows<Message> {
     }
 
     fn send(&self, window: WindowId, message: WindowMessage<Message>) {
-        let mut data = self.data.lock().map_or_else(PoisonError::into_inner, |g| g);
+        let mut data = self.data.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(open_window) = data.get(&window) {
             match open_window.sender.try_send(message) {
                 Ok(()) => {}
@@ -469,7 +473,7 @@ impl<Message> Windows<Message> {
     }
 
     fn close(&self, window: WindowId) -> bool {
-        let mut data = self.data.lock().map_or_else(PoisonError::into_inner, |g| g);
+        let mut data = self.data.lock().unwrap_or_else(PoisonError::into_inner);
         data.remove(&window);
         data.is_empty()
     }

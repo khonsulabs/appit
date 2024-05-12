@@ -15,7 +15,7 @@ use winit::event::{
 use winit::keyboard::PhysicalKey;
 use winit::window::{Fullscreen, Icon, Theme, WindowButtons, WindowId, WindowLevel};
 
-use crate::private::{self, OpenedWindow, WindowEvent, WindowSpawner};
+use crate::private::{self, OpenedWindow, RedrawGuard, WindowEvent, WindowSpawner};
 use crate::{
     App, Application, AsApplication, EventLoopMessage, Message, PendingApp, WindowMessage, Windows,
 };
@@ -34,7 +34,7 @@ impl<Message> Window<Message> {
         self.opened
             .0
             .lock()
-            .map_or_else(PoisonError::into_inner, |g| g)
+            .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .map(|w| w.id())
     }
@@ -264,6 +264,12 @@ where
 type SyncArcChannel<T> = (Arc<mpsc::SyncSender<T>>, mpsc::Receiver<T>);
 type SyncChannel<T> = (mpsc::SyncSender<T>, mpsc::Receiver<T>);
 
+enum HandleMessageResult {
+    Ok,
+    RedrawRequired(RedrawGuard),
+    Destroyed,
+}
+
 /// A window that is running in its own thread.
 pub struct RunningWindow<AppMessage>
 where
@@ -442,9 +448,15 @@ where
         // the entire app panics or not.
         let possible_panic = std::panic::catch_unwind(AssertUnwindSafe(move || {
             let mut behavior = Behavior::initialize(&mut self, context);
-            while !self.close && self.process_messages_until_redraw(&mut behavior) {
-                self.next_redraw_target = None;
-                behavior.redraw(&mut self);
+            while !self.close {
+                match self.process_messages_until_redraw(&mut behavior) {
+                    Ok(guard) => {
+                        self.next_redraw_target = None;
+                        behavior.redraw(&mut self);
+                        drop(guard);
+                    }
+                    Err(()) => break,
+                }
             }
             // Do not notify the main thread to close the window until after the
             // behavior is dropped. This upholds the requirement for RawWindowHandle
@@ -460,7 +472,10 @@ where
         }
     }
 
-    fn process_messages_until_redraw<Behavior>(&mut self, behavior: &mut Behavior) -> bool
+    fn process_messages_until_redraw<Behavior>(
+        &mut self,
+        behavior: &mut Behavior,
+    ) -> Result<Option<RedrawGuard>, ()>
     where
         Behavior: self::WindowBehavior<AppMessage>,
     {
@@ -471,27 +486,29 @@ where
                 // block.
                 TimeUntilRedraw::None => match self.messages.1.try_recv() {
                     Ok(message) => message,
-                    Err(mpsc::TryRecvError::Disconnected) => return false,
-                    Err(mpsc::TryRecvError::Empty) => return true,
+                    Err(mpsc::TryRecvError::Disconnected) => return Err(()),
+                    Err(mpsc::TryRecvError::Empty) => return Ok(None),
                 },
                 // We have a scheduled time for the next frame, and it hasn't
                 // elapsed yet.
                 TimeUntilRedraw::Some(duration_remaining) => {
                     match self.messages.1.recv_timeout(duration_remaining) {
                         Ok(message) => message,
-                        Err(mpsc::RecvTimeoutError::Timeout) => return true,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+                        Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return Err(()),
                     }
                 }
                 // No scheduled redraw time, sleep until the next message.
                 TimeUntilRedraw::Indefinite => match self.messages.1.recv() {
                     Ok(message) => message,
-                    Err(_) => return false,
+                    Err(_) => return Err(()),
                 },
             };
 
-            if !self.handle_message(message, behavior) {
-                break false;
+            match self.handle_message(message, behavior) {
+                HandleMessageResult::Ok => {}
+                HandleMessageResult::RedrawRequired(guard) => return Ok(Some(guard)),
+                HandleMessageResult::Destroyed => return Err(()),
             }
         }
     }
@@ -501,15 +518,16 @@ where
         &mut self,
         message: WindowMessage<AppMessage::Window>,
         behavior: &mut Behavior,
-    ) -> bool
+    ) -> HandleMessageResult
     where
         Behavior: self::WindowBehavior<AppMessage>,
     {
         match message {
             WindowMessage::User(user) => behavior.event(self, user),
             WindowMessage::Event(evt) => match evt {
-                WindowEvent::RedrawRequested => {
+                WindowEvent::RedrawRequested(guard) => {
                     self.set_needs_redraw();
+                    return HandleMessageResult::RedrawRequired(guard);
                 }
                 WindowEvent::CloseRequested => {
                     if behavior.close_requested(self) {
@@ -546,7 +564,7 @@ where
                     self.position = position;
                 }
                 WindowEvent::Destroyed => {
-                    return false;
+                    return HandleMessageResult::Destroyed;
                 }
                 WindowEvent::ThemeChanged(theme) => {
                     self.theme = theme;
@@ -667,7 +685,7 @@ where
             },
         }
 
-        true
+        HandleMessageResult::Ok
     }
 
     /// Sets this window to close as soon as possible.
@@ -1090,12 +1108,18 @@ where
     fn event(&mut self, window: &mut RunningWindow<AppMessage>, event: AppMessage::Window) {}
 }
 
+/// A runnable window.
 pub trait Run: WindowBehavior<()> {
     /// Runs a window with a default instance of this behavior's
     /// [`Context`](Self::Context).
     ///
     /// This function is shorthand for creating a [`PendingApp`], opening this
     /// window inside of it, and running the pending app.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
+    /// [`EventLoop::run`] for more information.
     fn run() -> Result<(), EventLoopError>
     where
         Self::Context: Default,
@@ -1109,6 +1133,11 @@ pub trait Run: WindowBehavior<()> {
     ///
     /// This function is shorthand for creating a [`PendingApp`], opening this
     /// window inside of it, and running the pending app.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
+    /// [`EventLoop::run`] for more information.
     fn run_with(context: Self::Context) -> Result<(), EventLoopError> {
         let mut app = PendingApp::new();
         Self::open_with(&mut app, context).expect("error opening initial window");

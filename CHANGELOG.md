@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - All `&Appplication` bounds now are `?Sized`, enabling `&dyn Application`
   parameters.
+- Redraw requests from `winit` now block the event loop thread until the window
+  has been repainted.
 
 ### Added
 
