@@ -149,6 +149,8 @@ pub struct WindowAttributes {
     pub window_level: WindowLevel,
     /// Whether the window is active or not.
     pub active: bool,
+    /// When true, this window will delay honoring the `visible` attribute until after the window behavior has been initialized and redrawn a single time.
+    pub delay_visible: bool,
     /// Name of the application
     ///
     /// - `WM_CLASS` on X11
@@ -182,6 +184,7 @@ impl Default for WindowAttributes {
             window_level: defaults.window_level,
             active: defaults.active,
             app_name: None,
+            delay_visible: true,
         }
     }
 }
@@ -210,7 +213,7 @@ where
     ///
     /// The only errors this funciton can return arise from
     /// [`winit::window::WindowBuilder::build`].
-    pub fn open(self) -> Result<Option<Window<AppMessage::Window>>, winit::error::OsError> {
+    pub fn open(mut self) -> Result<Option<Window<AppMessage::Window>>, winit::error::OsError> {
         // The window's thread shouldn't ever block for long periods of time. To
         // avoid a "frozen" window causing massive memory allocations, we'll use
         // a fixed-size channel and be cautious to not block the main event loop
@@ -218,6 +221,7 @@ where
         let (sender, receiver) = mpsc::sync_channel(65536);
         let sender = Arc::new(sender);
         let app = self.owner.as_application().app();
+        let show_after_init = self.attributes.delay_visible && std::mem::replace(&mut self.attributes.visible, false);
         let Some(winit) = self.owner.as_application_mut().open(
             self.attributes,
             sender.clone(),
@@ -243,6 +247,7 @@ where
                         cursor_position: None,
                         mouse_buttons: HashSet::default(),
                         keys: HashSet::default(),
+                        show_after_init,
                     };
 
                     thread::spawn(move || running_window.run_with::<Behavior>(self.context));
@@ -292,6 +297,7 @@ where
     focused: bool,
     theme: Theme,
     modifiers: Modifiers,
+    show_after_init: bool,
 }
 
 impl<AppMessage> RunningWindow<AppMessage>
@@ -448,6 +454,17 @@ where
         // the entire app panics or not.
         let possible_panic = std::panic::catch_unwind(AssertUnwindSafe(move || {
             let mut behavior = Behavior::initialize(&mut self, context);
+
+            // When it takes a while for a graphics stack to initialize, we can
+            // avoid showing a blank window due to our multi-threaded event
+            // handling by not showing the window until the graphics stack has
+            // been initialized.
+            if self.show_after_init {
+                self.next_redraw_target = None;
+                behavior.redraw(&mut self);
+                self.window.set_visible(true);
+            }
+            
             while !self.close {
                 match self.process_messages_until_redraw(&mut behavior) {
                     Ok(guard) => {

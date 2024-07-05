@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- `WindowAttributes::delay_visible` is a new setting initializes the window
+  `visible: false` before showing it after the first successful redraw. The goal
+  is to avoid the OS drawing an empty window before the window behavior has
+  initialized. This new attribute defaults to true.
+
 ## v0.3.0 (2024-05-12)
 
 ### Breaking Changes
