@@ -474,7 +474,9 @@ impl<Message> Windows<Message> {
 
     fn close(&self, window: WindowId) -> bool {
         let mut data = self.data.lock().unwrap_or_else(PoisonError::into_inner);
-        data.remove(&window);
+        if let Some(closed) = data.remove(&window) {
+            closed.winit.close();
+        }
         data.is_empty()
     }
 }

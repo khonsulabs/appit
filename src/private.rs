@@ -38,6 +38,10 @@ impl OpenedWindow {
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
+
+    pub(crate) fn close(&self) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
 }
 
 pub enum EventLoopMessage<AppMessage>

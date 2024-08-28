@@ -221,7 +221,8 @@ where
         let (sender, receiver) = mpsc::sync_channel(65536);
         let sender = Arc::new(sender);
         let app = self.owner.as_application().app();
-        let show_after_init = self.attributes.delay_visible && std::mem::replace(&mut self.attributes.visible, false);
+        let show_after_init =
+            self.attributes.delay_visible && std::mem::replace(&mut self.attributes.visible, false);
         let Some(winit) = self.owner.as_application_mut().open(
             self.attributes,
             sender.clone(),
@@ -464,7 +465,7 @@ where
                 behavior.redraw(&mut self);
                 self.window.set_visible(true);
             }
-            
+
             while !self.close {
                 match self.process_messages_until_redraw(&mut behavior) {
                     Ok(guard) => {
