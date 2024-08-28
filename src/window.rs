@@ -277,6 +277,7 @@ enum HandleMessageResult {
 }
 
 /// A window that is running in its own thread.
+#[allow(clippy::struct_excessive_bools)] // stop judging me clippy!
 pub struct RunningWindow<AppMessage>
 where
     AppMessage: Message,
