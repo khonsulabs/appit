@@ -1,6 +1,6 @@
 [package]
 name = "appit"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 rust-version = "1.70.0"
 description = "A math library specialized for 2d screen graphics."
