@@ -17,7 +17,8 @@ use winit::window::{Fullscreen, Icon, Theme, WindowButtons, WindowId, WindowLeve
 
 use crate::private::{self, OpenedWindow, RedrawGuard, WindowEvent, WindowSpawner};
 use crate::{
-    App, Application, AsApplication, EventLoopMessage, Message, PendingApp, WindowMessage, Windows,
+    App, Application, AsApplication, EventLoopMessage, ExecutingApp, Message, PendingApp,
+    WindowMessage,
 };
 
 /// A weak reference to a running window.
@@ -869,7 +870,7 @@ where
     /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
     /// [`EventLoop::run`] for more information.
     fn run_with_event_callback(
-        app_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
+        app_callback: impl FnMut(AppMessage, ExecutingApp<'_, AppMessage>) -> AppMessage::Response
             + 'static,
     ) -> Result<(), EventLoopError>
     where
@@ -895,7 +896,7 @@ where
     /// [`EventLoop::run`] for more information.
     fn run_with_context_and_event_callback(
         context: Self::Context,
-        app_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
+        app_callback: impl FnMut(AppMessage, ExecutingApp<'_, AppMessage>) -> AppMessage::Response
             + 'static,
     ) -> Result<(), EventLoopError> {
         let mut app = PendingApp::new_with_event_callback(app_callback);

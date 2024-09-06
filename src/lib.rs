@@ -8,6 +8,7 @@ mod private;
 mod window;
 
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::process::exit;
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -17,10 +18,115 @@ pub use window::{Run, RunningWindow, Window, WindowAttributes, WindowBehavior, W
 pub use winit;
 use winit::application::ApplicationHandler;
 use winit::error::{EventLoopError, OsError};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::event_loop::{
+    ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy, OwnedDisplayHandle,
+};
+use winit::monitor::MonitorHandle;
 use winit::window::WindowId;
 
 use crate::private::{EventLoopMessage, WindowEvent, WindowMessage};
+
+/// A reference to an executing application.
+pub struct ExecutingApp<'a, AppMessage>(ExecutingAppHandle<'a, AppMessage>)
+where
+    AppMessage: Message;
+
+impl<'a, AppMessage> ExecutingApp<'a, AppMessage>
+where
+    AppMessage: Message,
+{
+    fn new(
+        windows: &'a Windows<<AppMessage as Message>::Window>,
+        winit: impl Into<WinitHandle<'a, AppMessage>>,
+    ) -> Self {
+        Self(ExecutingAppHandle {
+            windows,
+            winit: winit.into(),
+        })
+    }
+
+    /// Returns the list of available monitors.
+    ///
+    /// This function will return an empty `Vec` if invoked before the
+    /// application has begun executing. This can occur if an app message is
+    /// sent before a `PendingApp` is run.
+    #[must_use]
+    pub fn available_monitors(&self) -> Vec<MonitorHandle> {
+        match &self.0.winit {
+            WinitHandle::Owned(_) => Vec::new(),
+            WinitHandle::Active(winit) => winit.available_monitors().collect(),
+        }
+    }
+
+    /// Returns a handle to the primary monitor.
+    ///
+    /// This function will return None if:
+    ///
+    /// - The application hasn't begun executing.
+    /// - The platform does not support determining a primary monitor.
+    #[must_use]
+    pub fn primary_monitor(&self) -> Option<MonitorHandle> {
+        match &self.0.winit {
+            WinitHandle::Owned(_) => None,
+            WinitHandle::Active(winit) => winit.primary_monitor(),
+        }
+    }
+
+    /// Returns a handle to the underlying display.
+    #[must_use]
+    pub fn owned_display_handle(&self) -> OwnedDisplayHandle {
+        match &self.0.winit {
+            WinitHandle::Owned(winit) => winit.owned_display_handle(),
+            WinitHandle::Active(winit) => winit.owned_display_handle(),
+        }
+    }
+}
+
+impl<AppMessage> Deref for ExecutingApp<'_, AppMessage>
+where
+    AppMessage: Message,
+{
+    type Target = Windows<AppMessage::Window>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.windows
+    }
+}
+
+struct ExecutingAppHandle<'a, AppMessage>
+where
+    AppMessage: Message,
+{
+    windows: &'a Windows<<AppMessage as Message>::Window>,
+    winit: WinitHandle<'a, AppMessage>,
+}
+
+enum WinitHandle<'a, AppMessage>
+where
+    AppMessage: Message,
+{
+    Owned(&'a EventLoop<EventLoopMessage<AppMessage>>),
+    Active(&'a ActiveEventLoop),
+}
+
+impl<'a, AppMessage> From<&'a ActiveEventLoop> for WinitHandle<'a, AppMessage>
+where
+    AppMessage: Message,
+{
+    fn from(handle: &'a ActiveEventLoop) -> Self {
+        Self::Active(handle)
+    }
+}
+
+impl<'a, AppMessage> From<&'a EventLoop<EventLoopMessage<AppMessage>>>
+    for WinitHandle<'a, AppMessage>
+where
+    AppMessage: Message,
+{
+    fn from(handle: &'a EventLoop<EventLoopMessage<AppMessage>>) -> Self {
+        Self::Owned(handle)
+    }
+}
 
 /// An application that is not yet running.
 pub struct PendingApp<AppMessage>
@@ -42,12 +148,8 @@ where
     spawner: WindowSpawner,
 }
 
-type BoxedEventCallback<AppMessage> = Box<
-    dyn FnMut(
-        AppMessage,
-        &Windows<<AppMessage as Message>::Window>,
-    ) -> <AppMessage as Message>::Response,
->;
+type BoxedEventCallback<AppMessage> =
+    Box<dyn FnMut(AppMessage, ExecutingApp<'_, AppMessage>) -> <AppMessage as Message>::Response>;
 
 impl Default for PendingApp<()> {
     fn default() -> Self {
@@ -72,7 +174,7 @@ where
     /// app is run, the app will immediately close.
     #[must_use]
     pub fn new_with_event_callback(
-        event_callback: impl FnMut(AppMessage, &Windows<AppMessage::Window>) -> AppMessage::Response
+        event_callback: impl FnMut(AppMessage, ExecutingApp<'_, AppMessage>) -> AppMessage::Response
             + 'static,
     ) -> Self {
         let event_loop = EventLoop::with_user_event()
@@ -88,6 +190,19 @@ where
             message_callback: Box::new(event_callback),
             pending_windows: Vec::new(),
         }
+    }
+
+    /// Executes `on_startup` once the app event loop has started.
+    ///
+    /// This is useful because some information provided by winit is only
+    /// available after the event loop has started. For example, to enter an
+    /// exclusive full screen mode, monitor information must be accessed which
+    /// requires the event loop to have been started.
+    pub fn on_startup<F>(&self, on_startup: F)
+    where
+        F: FnOnce(ExecutingApp<'_, AppMessage>) + Send + 'static,
+    {
+        self.running.push_on_startup(Box::new(on_startup));
     }
 
     /// Begins running the application.
@@ -161,6 +276,9 @@ where
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, message: EventLoopMessage<AppMessage>) {
         match message {
+            EventLoopMessage::Execute(closure) => {
+                closure(ExecutingApp::new(&self.running.windows, event_loop));
+            }
             EventLoopMessage::CloseWindow(window_id) => {
                 if self.running.windows.close(window_id) {
                     exit(0)
@@ -187,12 +305,16 @@ where
                 message,
                 response_sender,
             } => {
-                let _result =
-                    response_sender.send((self.message_callback)(message, &self.running.windows));
+                let _result = response_sender.send((self.message_callback)(
+                    message,
+                    ExecutingApp::new(&self.running.windows, event_loop),
+                ));
             }
         }
     }
 }
+
+type StartupClosure<AppMessage> = dyn FnOnce(ExecutingApp<'_, AppMessage>) + Send;
 
 /// A reference to a multi-window application.
 pub struct App<AppMessage>
@@ -201,6 +323,32 @@ where
 {
     proxy: EventLoopProxy<EventLoopMessage<AppMessage>>,
     windows: Windows<AppMessage::Window>,
+}
+
+impl<AppMessage> App<AppMessage>
+where
+    AppMessage: Message,
+{
+    /// Sends an app message to the main event loop to be handled by the
+    /// callback provided when the app was created.
+    ///
+    /// This function will return None if the main event loop is no longer
+    /// running. Otherwise, this function will block until the result of the
+    /// callback has been received.
+    pub fn send(&self, message: AppMessage) -> Option<AppMessage::Response> {
+        let (response_sender, response_receiver) = mpsc::sync_channel(1);
+        self.proxy
+            .send_event(EventLoopMessage::User {
+                message,
+                response_sender,
+            })
+            .ok()?;
+        response_receiver.recv().ok()
+    }
+
+    fn push_on_startup(&self, on_startup: Box<StartupClosure<AppMessage>>) {
+        let _ = self.proxy.send_event(EventLoopMessage::Execute(on_startup));
+    }
 }
 
 impl<AppMessage> Clone for App<AppMessage>
@@ -245,9 +393,27 @@ pub trait AsApplication<AppMessage> {
         AppMessage: Message;
 }
 
-impl<T, AppMessage> AsApplication<AppMessage> for T
+impl<AppMessage> AsApplication<AppMessage> for App<AppMessage>
 where
-    T: Application<AppMessage>,
+    AppMessage: Message,
+{
+    fn as_application(&self) -> &dyn Application<AppMessage>
+    where
+        AppMessage: Message,
+    {
+        self
+    }
+
+    fn as_application_mut(&mut self) -> &mut dyn Application<AppMessage>
+    where
+        AppMessage: Message,
+    {
+        self
+    }
+}
+
+impl<AppMessage> AsApplication<AppMessage> for PendingApp<AppMessage>
+where
     AppMessage: Message,
 {
     fn as_application(&self) -> &dyn Application<AppMessage>
@@ -287,7 +453,10 @@ where
     }
 
     fn send(&mut self, message: AppMessage) -> Option<<AppMessage as Message>::Response> {
-        Some((self.message_callback)(message, &self.running.windows))
+        Some((self.message_callback)(
+            message,
+            ExecutingApp::new(&self.running.windows, &self.event_loop),
+        ))
     }
 }
 
@@ -319,14 +488,8 @@ where
     }
 
     fn send(&mut self, message: AppMessage) -> Option<<AppMessage as Message>::Response> {
-        let (response_sender, response_receiver) = mpsc::sync_channel(1);
-        self.proxy
-            .send_event(EventLoopMessage::User {
-                message,
-                response_sender,
-            })
-            .ok()?;
-        response_receiver.recv().ok()
+        let this: &Self = self;
+        this.send(message)
     }
 }
 

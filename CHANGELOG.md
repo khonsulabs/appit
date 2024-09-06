@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Breaking Changes
+
+- Several functions now accept an `ExecutingApp` parameter instead of a
+  `Windows` parameter. This new type exposes access to other information from
+  the event loop such as monitor information. The affected APIs are:
+
+  - `PendingApp::new_with_event_callback`
+  - `WindowBehavior::run_witH_event_callback`
+  - `WindowBehavior::run_witH_context_and_event_callback`
+
+### Added
+
+- `PendingApp::on_startup` accepts a callback that will be invoked once the
+  event loop is executing.
+
+### Changed
+
+- `AsApplication` is now explicitly implemented for `App` and `PendingApp`
+  rather than implemented using a blanket implementation. This allows downstream
+  crates to create wrappers of these types that can implement `AsApplication`.
+
 ## v0.3.2 (2024-08-28)
 
 ### Fixed
