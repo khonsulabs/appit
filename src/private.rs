@@ -12,7 +12,7 @@ use winit::event_loop::AsyncRequestSerial;
 use winit::window::{ActivationToken, Theme, WindowId};
 
 use crate::window::WindowAttributes;
-use crate::{Message, StartupClosure};
+use crate::Message;
 
 pub type WindowSpawner = Box<dyn FnOnce(OpenedWindow) + Send + 'static>;
 
@@ -48,7 +48,6 @@ pub enum EventLoopMessage<AppMessage>
 where
     AppMessage: Message,
 {
-    Execute(Box<StartupClosure<AppMessage>>),
     OpenWindow {
         attrs: WindowAttributes,
         sender: Arc<mpsc::SyncSender<WindowMessage<AppMessage::Window>>>,

@@ -10,6 +10,7 @@ mod window;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::process::exit;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -18,6 +19,7 @@ pub use window::{Run, RunningWindow, Window, WindowAttributes, WindowBehavior, W
 pub use winit;
 use winit::application::ApplicationHandler;
 use winit::error::{EventLoopError, OsError};
+use winit::event::StartCause;
 use winit::event_loop::{
     ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy, OwnedDisplayHandle,
 };
@@ -136,6 +138,7 @@ where
     event_loop: EventLoop<EventLoopMessage<AppMessage>>,
     message_callback: BoxedEventCallback<AppMessage>,
     running: App<AppMessage>,
+    on_startup: Vec<Box<StartupClosure<AppMessage>>>,
     pending_windows: Vec<PendingWindow<AppMessage>>,
 }
 
@@ -186,8 +189,10 @@ where
             running: App {
                 proxy,
                 windows: Windows::default(),
+                started: Arc::new(AtomicBool::new(false)),
             },
             message_callback: Box::new(event_callback),
+            on_startup: Vec::new(),
             pending_windows: Vec::new(),
         }
     }
@@ -198,11 +203,11 @@ where
     /// available after the event loop has started. For example, to enter an
     /// exclusive full screen mode, monitor information must be accessed which
     /// requires the event loop to have been started.
-    pub fn on_startup<F>(&self, on_startup: F)
+    pub fn on_startup<F>(&mut self, on_startup: F)
     where
         F: FnOnce(ExecutingApp<'_, AppMessage>) + Send + 'static,
     {
-        self.running.push_on_startup(Box::new(on_startup));
+        self.on_startup.push(Box::new(on_startup));
     }
 
     /// Begins running the application.
@@ -218,11 +223,13 @@ where
             event_loop,
             message_callback,
             running,
+            on_startup,
             pending_windows,
         } = self;
         event_loop.run_app(&mut RunningApp::<AppMessage> {
             message_callback,
             running,
+            on_startup,
             pending_windows,
         })
     }
@@ -234,6 +241,7 @@ where
 {
     message_callback: BoxedEventCallback<AppMessage>,
     running: App<AppMessage>,
+    on_startup: Vec<Box<StartupClosure<AppMessage>>>,
     pending_windows: Vec<PendingWindow<AppMessage>>,
 }
 
@@ -241,8 +249,11 @@ impl<AppMessage> ApplicationHandler<EventLoopMessage<AppMessage>> for RunningApp
 where
     AppMessage: Message,
 {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        event_loop.set_control_flow(ControlFlow::Wait);
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        let StartCause::Init = cause else {
+            return;
+        };
+        self.running.started.store(true, Ordering::Relaxed);
         for PendingWindow {
             window,
             sender,
@@ -257,6 +268,13 @@ where
                 .expect("error spawning initial window");
             spawner(window);
         }
+        for on_startup in self.on_startup.drain(..) {
+            on_startup(ExecutingApp::new(&self.running.windows, event_loop));
+        }
+    }
+
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        event_loop.set_control_flow(ControlFlow::Wait);
     }
 
     fn window_event(
@@ -276,9 +294,6 @@ where
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, message: EventLoopMessage<AppMessage>) {
         match message {
-            EventLoopMessage::Execute(closure) => {
-                closure(ExecutingApp::new(&self.running.windows, event_loop));
-            }
             EventLoopMessage::CloseWindow(window_id) => {
                 if self.running.windows.close(window_id) {
                     exit(0)
@@ -323,6 +338,7 @@ where
 {
     proxy: EventLoopProxy<EventLoopMessage<AppMessage>>,
     windows: Windows<AppMessage::Window>,
+    started: Arc<AtomicBool>,
 }
 
 impl<AppMessage> App<AppMessage>
@@ -336,6 +352,10 @@ where
     /// running. Otherwise, this function will block until the result of the
     /// callback has been received.
     pub fn send(&self, message: AppMessage) -> Option<AppMessage::Response> {
+        if !self.started.load(Ordering::Relaxed) {
+            return None;
+        }
+
         let (response_sender, response_receiver) = mpsc::sync_channel(1);
         self.proxy
             .send_event(EventLoopMessage::User {
@@ -344,10 +364,6 @@ where
             })
             .ok()?;
         response_receiver.recv().ok()
-    }
-
-    fn push_on_startup(&self, on_startup: Box<StartupClosure<AppMessage>>) {
-        let _ = self.proxy.send_event(EventLoopMessage::Execute(on_startup));
     }
 }
 
@@ -359,6 +375,7 @@ where
         Self {
             proxy: self.proxy.clone(),
             windows: self.windows.clone(),
+            started: self.started.clone(),
         }
     }
 }
