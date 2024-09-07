@@ -238,6 +238,7 @@ where
                         occluded: winit.is_visible().unwrap_or(false),
                         focused: winit.has_focus(),
                         inner_size: winit.inner_size(),
+                        outer_size: winit.outer_size(),
                         position: winit.inner_position().unwrap_or_default(),
                         scale: winit.scale_factor(),
                         theme: winit.theme().unwrap_or(Theme::Dark),
@@ -290,6 +291,7 @@ where
     responses: SyncChannel<AppMessage::Response>,
     app: App<AppMessage>,
     inner_size: PhysicalSize<u32>,
+    outer_size: PhysicalSize<u32>,
     position: PhysicalPosition<i32>,
     cursor_position: Option<PhysicalPosition<f64>>,
     mouse_buttons: HashSet<MouseButton>,
@@ -394,7 +396,13 @@ where
         self.window.set_max_inner_size(Some(new_size));
     }
 
-    /// Returns the current locpositionation of the window, in pixels.
+    /// Returns the current outer size of the window, in pixels.
+    #[must_use]
+    pub const fn outer_size(&self) -> PhysicalSize<u32> {
+        self.outer_size
+    }
+
+    /// Returns the current position of the window, in pixels.
     #[must_use]
     pub const fn position(&self) -> PhysicalPosition<i32> {
         self.position
@@ -567,15 +575,19 @@ where
                     // callbacks are invoked.
                     self.scale = scale_factor;
                     let new_inner_size = self.window.inner_size();
-                    let inner_size_changed = self.inner_size != new_inner_size;
+                    let new_outer_size = self.window.outer_size();
                     self.inner_size = new_inner_size;
+                    self.outer_size = new_outer_size;
                     behavior.scale_factor_changed(self);
-                    if inner_size_changed {
+                    if self.inner_size != new_inner_size || self.outer_size != new_outer_size {
                         behavior.resized(self);
                     }
                 }
                 WindowEvent::Resized(new_inner_size) => {
-                    if self.inner_size != new_inner_size {
+                    let new_outer_size = self.window.outer_size();
+                    let outer_size_changed = new_outer_size != self.outer_size;
+                    self.outer_size = new_outer_size;
+                    if outer_size_changed || self.inner_size != new_inner_size {
                         self.inner_size = new_inner_size;
                         behavior.resized(self);
                     }
