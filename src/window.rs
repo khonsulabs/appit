@@ -239,7 +239,8 @@ where
                         focused: winit.has_focus(),
                         inner_size: winit.inner_size(),
                         outer_size: winit.outer_size(),
-                        position: winit.inner_position().unwrap_or_default(),
+                        inner_position: winit.inner_position().unwrap_or_default(),
+                        outer_position: winit.outer_position().unwrap_or_default(),
                         scale: winit.scale_factor(),
                         theme: winit.theme().unwrap_or(Theme::Dark),
                         window: winit,
@@ -292,7 +293,8 @@ where
     app: App<AppMessage>,
     inner_size: PhysicalSize<u32>,
     outer_size: PhysicalSize<u32>,
-    position: PhysicalPosition<i32>,
+    outer_position: PhysicalPosition<i32>,
+    inner_position: PhysicalPosition<i32>,
     cursor_position: Option<PhysicalPosition<f64>>,
     mouse_buttons: HashSet<MouseButton>,
     keys: HashSet<PhysicalKey>,
@@ -402,14 +404,20 @@ where
         self.outer_size
     }
 
-    /// Returns the current position of the window, in pixels.
+    /// Returns the current outer position of the window, in pixels.
     #[must_use]
-    pub const fn position(&self) -> PhysicalPosition<i32> {
-        self.position
+    pub const fn outer_position(&self) -> PhysicalPosition<i32> {
+        self.outer_position
+    }
+
+    /// Returns the current inner position of the window, in pixels.
+    #[must_use]
+    pub const fn inner_position(&self) -> PhysicalPosition<i32> {
+        self.inner_position
     }
 
     /// Sets the current position of the window, in pixels.
-    pub fn set_position(&self, new_position: PhysicalPosition<i32>) {
+    pub fn set_outer_position(&self, new_position: PhysicalPosition<i32>) {
         self.window.set_outer_position(new_position);
     }
 
@@ -592,9 +600,13 @@ where
                         behavior.resized(self);
                     }
                 }
-                WindowEvent::Moved(position) => {
-                    if self.position != position {
-                        self.position = position;
+                WindowEvent::Moved(outer_position) => {
+                    let inner_position = self.window.inner_position().unwrap_or_default();
+                    if self.outer_position != outer_position
+                        || self.inner_position != inner_position
+                    {
+                        self.outer_position = outer_position;
+                        self.inner_position = inner_position;
                         behavior.moved(self);
                     }
                 }
