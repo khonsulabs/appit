@@ -581,7 +581,10 @@ where
                     }
                 }
                 WindowEvent::Moved(position) => {
-                    self.position = position;
+                    if self.position != position {
+                        self.position = position;
+                        behavior.moved(self);
+                    }
                 }
                 WindowEvent::Destroyed => {
                     return HandleMessageResult::Destroyed;
@@ -978,6 +981,11 @@ where
     /// returns the current size.
     #[allow(unused_variables)]
     fn resized(&mut self, window: &mut RunningWindow<AppMessage>) {}
+
+    /// The window has been moved. [`RunningWindow::position()`] returns the
+    /// current position.
+    #[allow(unused_variables)]
+    fn moved(&mut self, window: &mut RunningWindow<AppMessage>) {}
 
     /// The window's theme has been updated. [`RunningWindow::theme()`]
     /// returns the current theme.

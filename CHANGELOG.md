@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `PendingApp::on_startup` accepts a callback that will be invoked once the
   event loop is executing.
+- `WindowBehavior::moved` is called when the window moves.
 
 ### Changed
 
