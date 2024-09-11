@@ -22,7 +22,7 @@ use crate::{
 };
 
 /// A weak reference to a running window.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Window<Message> {
     opened: OpenedWindow,
     sender: Weak<mpsc::SyncSender<WindowMessage<Message>>>,
@@ -57,6 +57,15 @@ impl<Message> Window<Message> {
             Ok(()) => Ok(()),
             Err(mpsc::SendError(WindowMessage::User(message))) => Err(message),
             _ => unreachable!("same input as output"),
+        }
+    }
+}
+
+impl<Message> Clone for Window<Message> {
+    fn clone(&self) -> Self {
+        Self {
+            opened: self.opened.clone(),
+            sender: self.sender.clone(),
         }
     }
 }

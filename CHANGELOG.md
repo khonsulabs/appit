@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `RunningWindow::outer_position`. `RunningWindow::set_position` has been
   renamed to `RunningWindow::set_outer_position`.
 
+### Fixed
+
+- `Window`'s `Clone` implementation no longer requires its generic parameter to
+  implement `Clone`.
+
 ### Added
 
 - `PendingApp::on_startup` accepts a callback that will be invoked once the
