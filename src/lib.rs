@@ -325,6 +325,14 @@ where
                     ExecutingApp::new(&self.running.windows, event_loop),
                 ));
             }
+            EventLoopMessage::PreventShutdown => {
+                self.running.windows.prevent_shutdown();
+            }
+            EventLoopMessage::AllowShutdown => {
+                if self.running.windows.allow_shutdown() {
+                    exit(0)
+                }
+            }
         }
     }
 }
@@ -364,6 +372,20 @@ where
             })
             .ok()?;
         response_receiver.recv().ok()
+    }
+
+    /// Creates a guard that prevents this app from shutting down.
+    ///
+    /// If the app is not currently running, this function returns None.
+    ///
+    /// Once a guard is allocated the app will not be closed automatically when
+    /// the final window is closed. If the final shutdown guard is dropped while
+    /// no windows are open, the app will be closed.
+    pub fn prevent_shutdown(&self) -> Option<ShutdownGuard<AppMessage>> {
+        self.proxy
+            .send_event(EventLoopMessage::PreventShutdown)
+            .ok()
+            .map(|()| ShutdownGuard { app: self.clone() })
     }
 }
 
@@ -540,13 +562,27 @@ where
 
 /// A collection of open windows.
 pub struct Windows<Message> {
-    data: Arc<Mutex<HashMap<WindowId, OpenWindow<Message>>>>,
+    data: Arc<Mutex<WindowsData<Message>>>,
+}
+
+struct WindowsData<Message> {
+    open: HashMap<WindowId, OpenWindow<Message>>,
+    guards: usize,
+}
+
+impl<Message> WindowsData<Message> {
+    fn should_shutdown(&self) -> bool {
+        self.open.is_empty() && self.guards == 0
+    }
 }
 
 impl<Message> Default for Windows<Message> {
     fn default() -> Self {
         Self {
-            data: Arc::default(),
+            data: Arc::new(Mutex::new(WindowsData {
+                open: HashMap::new(),
+                guards: 0,
+            })),
         }
     }
 }
@@ -564,7 +600,7 @@ impl<Message> Windows<Message> {
     /// been opened and is still open.
     pub fn get(&self, id: WindowId) -> Option<Arc<winit::window::Window>> {
         let windows = self.data.lock().unwrap_or_else(PoisonError::into_inner);
-        windows.get(&id).and_then(|w| w.winit.winit())
+        windows.open.get(&id).and_then(|w| w.winit.winit())
     }
 
     #[allow(unsafe_code)]
@@ -626,7 +662,7 @@ impl<Message> Windows<Message> {
         let id = winit.id();
         let winit = OpenedWindow(Arc::new(Mutex::new(Some(winit))));
         let mut windows = self.data.lock().unwrap_or_else(PoisonError::into_inner);
-        windows.insert(
+        windows.open.insert(
             id,
             OpenWindow {
                 winit: winit.clone(),
@@ -638,7 +674,7 @@ impl<Message> Windows<Message> {
 
     fn send(&self, window: WindowId, message: WindowMessage<Message>) {
         let mut data = self.data.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(open_window) = data.get(&window) {
+        if let Some(open_window) = data.open.get(&window) {
             match open_window.sender.try_send(message) {
                 Ok(()) => {}
                 Err(mpsc::TrySendError::Full(_)) => {
@@ -646,7 +682,7 @@ impl<Message> Windows<Message> {
                 }
                 Err(mpsc::TrySendError::Disconnected(_)) => {
                     // Window no longer active, remove it.
-                    data.remove(&window);
+                    data.open.remove(&window);
                 }
             }
         }
@@ -654,14 +690,42 @@ impl<Message> Windows<Message> {
 
     fn close(&self, window: WindowId) -> bool {
         let mut data = self.data.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(closed) = data.remove(&window) {
+        if let Some(closed) = data.open.remove(&window) {
             closed.winit.close();
         }
-        data.is_empty()
+        data.should_shutdown()
+    }
+
+    fn prevent_shutdown(&self) {
+        let mut data = self.data.lock().unwrap_or_else(PoisonError::into_inner);
+        data.guards += 1;
+    }
+
+    fn allow_shutdown(&self) -> bool {
+        let mut data = self.data.lock().unwrap_or_else(PoisonError::into_inner);
+        data.guards -= 1;
+        data.should_shutdown()
     }
 }
 
 struct OpenWindow<User> {
     winit: OpenedWindow,
     sender: Arc<mpsc::SyncSender<WindowMessage<User>>>,
+}
+
+/// A guard preventing an [`App`] from shutting down.
+pub struct ShutdownGuard<Message>
+where
+    Message: crate::Message,
+{
+    app: App<Message>,
+}
+
+impl<Message> Drop for ShutdownGuard<Message>
+where
+    Message: crate::Message,
+{
+    fn drop(&mut self) {
+        let _ = self.app.proxy.send_event(EventLoopMessage::AllowShutdown);
+    }
 }

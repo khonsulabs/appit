@@ -60,6 +60,8 @@ where
         message: AppMessage,
         response_sender: mpsc::SyncSender<AppMessage::Response>,
     },
+    PreventShutdown,
+    AllowShutdown,
 }
 
 #[derive(Debug)]

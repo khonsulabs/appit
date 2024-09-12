@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `WindowBehavior::moved` is called when the window moves.
 - `RunningWindow::outer_size` is a new function that returns the window's
   current size including decorations.
+- `App::prevent_shutdown()` returns a guard that prevents the application from
+  closing automatically when the final window is closed.
 
 ### Changed
 
