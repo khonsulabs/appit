@@ -489,7 +489,7 @@ where
             // avoid showing a blank window due to our multi-threaded event
             // handling by not showing the window until the graphics stack has
             // been initialized.
-            if let Some(activate) = dbg!(self.show_after_init) {
+            if let Some(activate) = self.show_after_init {
                 self.next_redraw_target = None;
                 behavior.redraw(&mut self);
                 self.window.set_visible(true);
