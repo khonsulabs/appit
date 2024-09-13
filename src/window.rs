@@ -231,8 +231,10 @@ where
         let (sender, receiver) = mpsc::sync_channel(65536);
         let sender = Arc::new(sender);
         let app = self.owner.as_application().app();
-        let show_after_init =
-            self.attributes.delay_visible && std::mem::replace(&mut self.attributes.visible, false);
+        let show_after_init = (self.attributes.delay_visible
+            && std::mem::replace(&mut self.attributes.visible, false))
+        .then_some(self.attributes.active);
+
         let Some(winit) = self.owner.as_application_mut().open(
             self.attributes,
             sender.clone(),
@@ -313,7 +315,7 @@ where
     focused: bool,
     theme: Theme,
     modifiers: Modifiers,
-    show_after_init: bool,
+    show_after_init: Option<bool>,
 }
 
 impl<AppMessage> RunningWindow<AppMessage>
@@ -487,11 +489,16 @@ where
             // avoid showing a blank window due to our multi-threaded event
             // handling by not showing the window until the graphics stack has
             // been initialized.
-            if self.show_after_init {
+            if let Some(activate) = dbg!(self.show_after_init) {
                 self.next_redraw_target = None;
                 behavior.redraw(&mut self);
                 self.window.set_visible(true);
+                if activate {
+                    self.window.focus_window();
+                }
             }
+
+            behavior.initialized(&mut self);
 
             while !self.close {
                 match self.process_messages_until_redraw(&mut behavior) {
@@ -984,6 +991,13 @@ where
 
     /// Displays the contents of the window.
     fn redraw(&mut self, window: &mut RunningWindow<AppMessage>);
+
+    /// Invoked once a window is fully initialized.
+    ///
+    /// This is invoked after the window has been presented to the user, if it
+    /// is initially visible.
+    #[allow(unused_variables)]
+    fn initialized(&mut self, window: &mut RunningWindow<AppMessage>) {}
 
     /// The window has been requested to be closed. This can happen as a result
     /// of the user clicking the close button.

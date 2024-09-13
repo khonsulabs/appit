@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Window`'s `Clone` implementation no longer requires its generic parameter to
   implement `Clone`.
+- `WindowAttributes::active` is now honored when using `delay_visible`.
 
 ### Added
 
@@ -34,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   current size including decorations.
 - `App::prevent_shutdown()` returns a guard that prevents the application from
   closing automatically when the final window is closed.
+- `WindowBehavior::initialized` is called once when the window has been fully
+  initialized. This happens after the `delay_visible` logic has been executed.
 
 ### Changed
 
