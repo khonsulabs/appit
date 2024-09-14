@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the event loop such as monitor information. The affected APIs are:
 
   - `PendingApp::new_with_event_callback`
-  - `WindowBehavior::run_witH_event_callback`
-  - `WindowBehavior::run_witH_context_and_event_callback`
+  - `WindowBehavior::run_with_event_callback`
+  - `WindowBehavior::run_with_context_and_event_callback`
 - `RunningWindow::position` has been split into `RunningWindow::inner_position`
   and `RunningWindow::outer_position`. `RunningWindow::set_position` has been
   renamed to `RunningWindow::set_outer_position`.

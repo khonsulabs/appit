@@ -491,6 +491,7 @@ where
             // been initialized.
             if let Some(activate) = self.show_after_init {
                 self.next_redraw_target = None;
+                self.inner_size = self.window.inner_size();
                 behavior.redraw(&mut self);
                 self.window.set_visible(true);
                 if activate {
