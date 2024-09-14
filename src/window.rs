@@ -71,12 +71,6 @@ impl<Message> Clone for Window<Message> {
 }
 
 /// A builder for a window.
-///
-/// This type is similar to winit's
-/// [`WindowBuilder`](winit::window::WindowBuilder), except that it only
-/// supports the cross-platform interface. Support for additional
-/// platform-specific settings may be possible as long as all types introduced
-/// are `Send`.
 pub struct WindowBuilder<'a, Behavior, Application, AppMessage>
 where
     Behavior: self::WindowBehavior<AppMessage>,
@@ -221,8 +215,8 @@ where
     ///
     /// # Errors
     ///
-    /// The only errors this funciton can return arise from
-    /// [`winit::window::WindowBuilder::build`].
+    /// This function returns any error that winit may return from attempting to
+    /// open a window.
     pub fn open(mut self) -> Result<Option<Window<AppMessage::Window>>, winit::error::OsError> {
         // The window's thread shouldn't ever block for long periods of time. To
         // avoid a "frozen" window causing massive memory allocations, we'll use
@@ -911,8 +905,10 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
-    /// [`EventLoop::run`] for more information.
+    /// Returns an [`EventLoopError`](winit::error::EventLoopError) upon the
+    /// loop exiting due to an error. See
+    /// [`EventLoop::run`](winit::event_loop::EventLoop::run) for more
+    /// information.
     fn run_with_event_callback(
         app_callback: impl FnMut(AppMessage, ExecutingApp<'_, AppMessage>) -> AppMessage::Response
             + 'static,
@@ -936,8 +932,10 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
-    /// [`EventLoop::run`] for more information.
+    /// Returns an [`EventLoopError`](winit::error::EventLoopError) upon the
+    /// loop exiting due to an error. See
+    /// [`EventLoop::run`](winit::event_loop::EventLoop::run) for more
+    /// information.
     fn run_with_context_and_event_callback(
         context: Self::Context,
         app_callback: impl FnMut(AppMessage, ExecutingApp<'_, AppMessage>) -> AppMessage::Response
@@ -956,8 +954,8 @@ where
     ///
     /// # Errors
     ///
-    /// The only errors this funciton can return arise from
-    /// [`winit::window::WindowBuilder::build`].
+    /// This function returns any error that winit may return from attempting to
+    /// open a window.
     fn open<App>(app: &mut App) -> Result<Option<Window<AppMessage::Window>>, OsError>
     where
         App: AsApplication<AppMessage> + ?Sized,
@@ -974,8 +972,8 @@ where
     ///
     /// # Errors
     ///
-    /// The only errors this funciton can return arise from
-    /// [`winit::window::WindowBuilder::build`].
+    /// This function returns any error that winit may return from attempting to
+    /// open a window.
     fn open_with<App>(
         app: &mut App,
         context: Self::Context,
@@ -1030,8 +1028,8 @@ where
     #[allow(unused_variables)]
     fn resized(&mut self, window: &mut RunningWindow<AppMessage>) {}
 
-    /// The window has been moved. [`RunningWindow::position()`] returns the
-    /// current position.
+    /// The window has been moved. [`RunningWindow::outer_position()`] returns
+    /// the current position.
     #[allow(unused_variables)]
     fn moved(&mut self, window: &mut RunningWindow<AppMessage>) {}
 
@@ -1187,15 +1185,17 @@ where
 /// A runnable window.
 pub trait Run: WindowBehavior<()> {
     /// Runs a window with a default instance of this behavior's
-    /// [`Context`](Self::Context).
+    /// [`Context`](WindowBehavior::Context).
     ///
     /// This function is shorthand for creating a [`PendingApp`], opening this
     /// window inside of it, and running the pending app.
     ///
     /// # Errors
     ///
-    /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
-    /// [`EventLoop::run`] for more information.
+    /// Returns an [`EventLoopError`](winit::error::EventLoopError) upon the
+    /// loop exiting due to an error. See
+    /// [`EventLoop::run`](winit::event_loop::EventLoop::run) for more
+    /// information.
     fn run() -> Result<(), EventLoopError>
     where
         Self::Context: Default,
@@ -1205,15 +1205,17 @@ pub trait Run: WindowBehavior<()> {
         app.run()
     }
 
-    /// Runs a window with the provided [`Context`](Self::Context).
+    /// Runs a window with the provided [`Context`](WindowBehavior::Context).
     ///
     /// This function is shorthand for creating a [`PendingApp`], opening this
     /// window inside of it, and running the pending app.
     ///
     /// # Errors
     ///
-    /// Returns an [`EventLoopError`] upon the loop exiting due to an error. See
-    /// [`EventLoop::run`] for more information.
+    /// Returns an [`EventLoopError`](winit::error::EventLoopError) upon the
+    /// loop exiting due to an error. See
+    /// [`EventLoop::run`](winit::event_loop::EventLoop::run) for more
+    /// information.
     fn run_with(context: Self::Context) -> Result<(), EventLoopError> {
         let mut app = PendingApp::new();
         Self::open_with(&mut app, context).expect("error opening initial window");
