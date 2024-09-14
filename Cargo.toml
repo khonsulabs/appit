@@ -1,6 +1,6 @@
 [package]
 name = "appit"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.70.0"
 description = "A math library specialized for 2d screen graphics."
@@ -21,4 +21,4 @@ rwh_05 = ["winit/rwh_05"]
 
 
 [dependencies]
-winit = { version = "0.30.0", default-features = false }
+winit = { version = "0.30.5", default-features = false }
