@@ -491,7 +491,6 @@ where
             // been initialized.
             if let Some(activate) = self.show_after_init {
                 self.next_redraw_target = None;
-                self.inner_size = self.window.inner_size();
                 behavior.redraw(&mut self);
                 self.window.set_visible(true);
                 if activate {
@@ -505,6 +504,7 @@ where
                 match self.process_messages_until_redraw(&mut behavior) {
                     Ok(guard) => {
                         self.next_redraw_target = None;
+                        self.inner_size = self.window.inner_size();
                         behavior.redraw(&mut self);
                         drop(guard);
                     }
