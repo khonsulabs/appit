@@ -397,10 +397,14 @@ where
     }
 
     /// Sets the inner size of the window, in pixels.
-    pub fn set_inner_size(&self, new_size: PhysicalSize<u32>) {
-        // TODO not sure if this is reasonable
-        self.window.set_min_inner_size(Some(new_size));
-        self.window.set_max_inner_size(Some(new_size));
+    #[must_use]
+    pub fn request_inner_size(&mut self, new_size: PhysicalSize<u32>) -> Option<PhysicalSize<u32>> {
+        let result = self.window.request_inner_size(new_size);
+        if let Some(applied_size) = result {
+            self.inner_size = applied_size;
+            self.outer_size = self.window.outer_size();
+        }
+        result
     }
 
     /// Returns the current outer size of the window, in pixels.
