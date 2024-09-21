@@ -2,7 +2,7 @@ use winit::{event_loop::EventLoopProxy, window::Theme};
 
 use crate::{private::EventLoopMessage, Message};
 
-fn observe_darkmode_changes<AppMessage>(proxy: EventLoopProxy<EventLoopMessage<AppMessage>>)
+pub fn observe_darkmode_changes<AppMessage>(proxy: EventLoopProxy<EventLoopMessage<AppMessage>>)
 where
     AppMessage: Message,
 {
