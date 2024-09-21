@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   underlying window is resized immediately. Notably, this happens on Wayland but
   may happen on some other platforms as well.
 
+### Added
+
+- A new feature `xdg` has been added, enabled by default, that enables detecting
+  dark mode changes on Linux.
+
 ## v0.4.0 (2024-09-14)
 
 ### Breaking Changes

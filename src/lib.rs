@@ -7,6 +7,9 @@
 mod private;
 mod window;
 
+#[cfg(all(target_os = "linux", feature = "xdg"))]
+mod xdg;
+
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::process::exit;
@@ -253,6 +256,8 @@ where
         let StartCause::Init = cause else {
             return;
         };
+        #[cfg(all(target_os = "linux", feature = "xdg"))]
+        self.observe_darkmode_changes(event_loop.proxy());
         self.running.started.store(true, Ordering::Relaxed);
         for PendingWindow {
             window,
@@ -332,6 +337,10 @@ where
                 if self.running.windows.allow_shutdown() {
                     exit(0)
                 }
+            }
+            #[cfg(all(target_os = "linux", feature = "xdg"))]
+            EventLoopMessage::ThemeChanged(theme) => {
+                self.running.windows.theme_changed(theme);
             }
         }
     }
@@ -705,6 +714,16 @@ impl<Message> Windows<Message> {
         let mut data = self.data.lock().unwrap_or_else(PoisonError::into_inner);
         data.guards -= 1;
         data.should_shutdown()
+    }
+
+    #[cfg(all(target_os = "linux", feature = "xdg"))]
+    fn theme_changed(&self, theme: winit::window::Theme) {
+        let data = self.data.lock().unwrap_or_else(PoisonError::into_inner);
+        for window in data.open.values() {
+            let _ = window
+                .sender
+                .send(WindowMessage::Event(WindowEvent::ThemeChanged(theme)));
+        }
     }
 }
 

@@ -62,6 +62,8 @@ where
     },
     PreventShutdown,
     AllowShutdown,
+    #[cfg(all(target_os = "linux", feature = "xdg"))]
+    ThemeChanged(Theme),
 }
 
 #[derive(Debug)]
