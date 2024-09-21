@@ -229,6 +229,10 @@ where
             on_startup,
             pending_windows,
         } = self;
+
+        #[cfg(all(target_os = "linux", feature = "xdg"))]
+        xdg::observe_darkmode_changes(event_loop.create_proxy());
+
         event_loop.run_app(&mut RunningApp::<AppMessage> {
             message_callback,
             running,
@@ -256,8 +260,6 @@ where
         let StartCause::Init = cause else {
             return;
         };
-        #[cfg(all(target_os = "linux", feature = "xdg"))]
-        self.observe_darkmode_changes(event_loop.proxy());
         self.running.started.store(true, Ordering::Relaxed);
         for PendingWindow {
             window,
