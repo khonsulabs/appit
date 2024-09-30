@@ -318,7 +318,7 @@ where
 {
     /// Returns a reference to the underlying window.
     #[must_use]
-    pub fn winit(&self) -> &winit::window::Window {
+    pub fn winit(&self) -> &Arc<winit::window::Window> {
         &self.window
     }
 

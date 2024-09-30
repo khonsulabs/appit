@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This new function properly updates the `inner_size` and `outer_size` when the
   underlying window is resized immediately. Notably, this happens on Wayland but
   may happen on some other platforms as well.
+- `RunningWindow::winit` now returns an `Arc` wrapped winit window.
 
 ### Added
 
