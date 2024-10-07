@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   underlying window is resized immediately. Notably, this happens on Wayland but
   may happen on some other platforms as well.
 - `RunningWindow::winit` now returns an `Arc` wrapped winit window.
+- `AppMessage::Error` is a new associated type that is used to communicate
+  errors from window threads to the event loop. To facilitate this
+  communication, `App::send_error` and `Application::send_error` have been added.
+
+  Additionally, `WindowBehavior::Initialize` now returns a `Result<Self,
+  AppMessage::Error>`.
+
+  To install a hander, use `PendingApp::on_error`.
 
 ### Added
 

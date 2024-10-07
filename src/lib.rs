@@ -11,6 +11,7 @@ mod window;
 mod xdg;
 
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::ops::Deref;
 use std::process::exit;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,7 +25,7 @@ use winit::application::ApplicationHandler;
 use winit::error::{EventLoopError, OsError};
 use winit::event::StartCause;
 use winit::event_loop::{
-    ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy, OwnedDisplayHandle,
+    ActiveEventLoop, ControlFlow, EventLoop, EventLoopClosed, EventLoopProxy, OwnedDisplayHandle,
 };
 use winit::monitor::MonitorHandle;
 use winit::window::WindowId;
@@ -143,6 +144,7 @@ where
     running: App<AppMessage>,
     on_startup: Vec<Box<StartupClosure<AppMessage>>>,
     pending_windows: Vec<PendingWindow<AppMessage>>,
+    on_error: Option<Box<dyn FnMut(AppMessage::Error)>>,
 }
 
 struct PendingWindow<AppMessage>
@@ -197,7 +199,17 @@ where
             message_callback: Box::new(event_callback),
             on_startup: Vec::new(),
             pending_windows: Vec::new(),
+            on_error: None,
         }
+    }
+
+    /// Sets a handler that is invoked when an app receives an
+    /// [`AppTypes::Error`].
+    pub fn on_error<F>(&mut self, on_error: F)
+    where
+        F: FnMut(AppMessage::Error) + 'static,
+    {
+        self.on_error = Some(Box::new(on_error));
     }
 
     /// Executes `on_startup` once the app event loop has started.
@@ -228,6 +240,7 @@ where
             running,
             on_startup,
             pending_windows,
+            on_error,
         } = self;
 
         #[cfg(all(target_os = "linux", feature = "xdg"))]
@@ -238,6 +251,7 @@ where
             running,
             on_startup,
             pending_windows,
+            on_error,
         })
     }
 }
@@ -250,6 +264,7 @@ where
     running: App<AppMessage>,
     on_startup: Vec<Box<StartupClosure<AppMessage>>>,
     pending_windows: Vec<PendingWindow<AppMessage>>,
+    on_error: Option<Box<dyn FnMut(AppMessage::Error)>>,
 }
 
 impl<AppMessage> ApplicationHandler<EventLoopMessage<AppMessage>> for RunningApp<AppMessage>
@@ -340,6 +355,11 @@ where
                     exit(0)
                 }
             }
+            EventLoopMessage::Error(err) => {
+                if let Some(handler) = &mut self.on_error {
+                    handler(err);
+                }
+            }
             #[cfg(all(target_os = "linux", feature = "xdg"))]
             EventLoopMessage::ThemeChanged(theme) => {
                 self.running.windows.theme_changed(theme);
@@ -385,6 +405,26 @@ where
         response_receiver.recv().ok()
     }
 
+    /// Sends an error to the event loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the event loop is not currently running.
+    pub fn send_error(
+        &self,
+        error: AppMessage::Error,
+    ) -> Result<(), EventLoopClosed<AppMessage::Error>> {
+        if !self.started.load(Ordering::Relaxed) {
+            return Err(EventLoopClosed(error));
+        }
+
+        match self.proxy.send_event(EventLoopMessage::Error(error)) {
+            Ok(()) => Ok(()),
+            Err(EventLoopClosed(EventLoopMessage::Error(err))) => Err(EventLoopClosed(err)),
+            _ => unreachable!("returned value should be the same"),
+        }
+    }
+
     /// Creates a guard that prevents this app from shutting down.
     ///
     /// If the app is not currently running, this function returns None.
@@ -428,6 +468,16 @@ where
     /// running. Otherwise, this function will block until the result of the
     /// callback has been received.
     fn send(&mut self, message: AppMessage) -> Option<AppMessage::Response>;
+
+    /// Sends an error to the event loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the event loop is not currently running.
+    fn send_error(
+        &mut self,
+        error: AppMessage::Error,
+    ) -> Result<(), EventLoopClosed<AppMessage::Error>>;
 }
 
 /// A type that contains a reference to an [`Application`] implementor.
@@ -487,11 +537,15 @@ pub trait Message: Send + 'static {
     type Window: Send;
     /// The type returned when responding to this message.
     type Response: Send;
+    /// The type that is communicated when an error occurs that the event
+    /// loop/app should handle.
+    type Error: Send;
 }
 
 impl Message for () {
     type Response = ();
     type Window = ();
+    type Error = Infallible;
 }
 
 impl<AppMessage> Application<AppMessage> for PendingApp<AppMessage>
@@ -507,6 +561,16 @@ where
             message,
             ExecutingApp::new(&self.running.windows, &self.event_loop),
         ))
+    }
+
+    fn send_error(
+        &mut self,
+        error: <AppMessage as Message>::Error,
+    ) -> Result<(), EventLoopClosed<<AppMessage as Message>::Error>> {
+        if let Some(on_error) = &mut self.on_error {
+            on_error(error);
+        }
+        Ok(())
     }
 }
 
@@ -540,6 +604,14 @@ where
     fn send(&mut self, message: AppMessage) -> Option<<AppMessage as Message>::Response> {
         let this: &Self = self;
         this.send(message)
+    }
+
+    fn send_error(
+        &mut self,
+        error: <AppMessage as Message>::Error,
+    ) -> Result<(), EventLoopClosed<<AppMessage as Message>::Error>> {
+        let this: &Self = self;
+        this.send_error(error)
     }
 }
 
@@ -735,16 +807,16 @@ struct OpenWindow<User> {
 }
 
 /// A guard preventing an [`App`] from shutting down.
-pub struct ShutdownGuard<Message>
+pub struct ShutdownGuard<AppMessage>
 where
-    Message: crate::Message,
+    AppMessage: Message,
 {
-    app: App<Message>,
+    app: App<AppMessage>,
 }
 
-impl<Message> Drop for ShutdownGuard<Message>
+impl<AppMessage> Drop for ShutdownGuard<AppMessage>
 where
-    Message: crate::Message,
+    AppMessage: Message,
 {
     fn drop(&mut self) {
         let _ = self.app.proxy.send_event(EventLoopMessage::AllowShutdown);

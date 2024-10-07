@@ -481,7 +481,7 @@ where
         // recovery for a panic inside of a window, the only question is whether
         // the entire app panics or not.
         let possible_panic = std::panic::catch_unwind(AssertUnwindSafe(move || {
-            let mut behavior = Behavior::initialize(&mut self, context);
+            let mut behavior = Behavior::initialize(&mut self, context)?;
 
             // When it takes a while for a graphics stack to initialize, we can
             // avoid showing a blank window due to our multi-threaded event
@@ -513,13 +513,20 @@ where
             // behavior is dropped. This upholds the requirement for RawWindowHandle
             // by making sure that any resources required by the behavior have had a
             // chance to be freed.
+            Ok(())
         }));
 
-        if let Err(panic) = possible_panic {
-            let _result = proxy.send_event(EventLoopMessage::WindowPanic(window_id));
-            std::panic::resume_unwind(panic)
-        } else {
-            let _result = proxy.send_event(EventLoopMessage::CloseWindow(window_id));
+        match possible_panic {
+            Ok(Ok(())) => {
+                let _result = proxy.send_event(EventLoopMessage::CloseWindow(window_id));
+            }
+            Ok(Err(init_error)) => {
+                let _result = proxy.send_event(EventLoopMessage::Error(init_error));
+            }
+            Err(panic) => {
+                let _result = proxy.send_event(EventLoopMessage::WindowPanic(window_id));
+                std::panic::resume_unwind(panic)
+            }
         }
     }
 
@@ -801,6 +808,12 @@ where
             .ok()?;
         self.responses.1.recv().ok()
     }
+    fn send_error(
+        &mut self,
+        error: <AppMessage as Message>::Error,
+    ) -> Result<(), winit::event_loop::EventLoopClosed<<AppMessage as Message>::Error>> {
+        self.app.send_error(error)
+    }
 }
 
 impl<AppMessage> private::ApplicationSealed<AppMessage> for RunningWindow<AppMessage>
@@ -990,7 +1003,15 @@ where
 
     /// Returns a new instance of this behavior after initializing itself with
     /// the window and context.
-    fn initialize(window: &mut RunningWindow<AppMessage>, context: Self::Context) -> Self;
+    ///
+    /// # Errors
+    ///
+    /// If the window cannot be initialized, this function should return the
+    /// cause of the failure.
+    fn initialize(
+        window: &mut RunningWindow<AppMessage>,
+        context: Self::Context,
+    ) -> Result<Self, AppMessage::Error>;
 
     /// Displays the contents of the window.
     fn redraw(&mut self, window: &mut RunningWindow<AppMessage>);

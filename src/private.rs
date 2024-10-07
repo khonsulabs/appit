@@ -62,6 +62,7 @@ where
     },
     PreventShutdown,
     AllowShutdown,
+    Error(AppMessage::Error),
     #[cfg(all(target_os = "linux", feature = "xdg"))]
     ThemeChanged(Theme),
 }
